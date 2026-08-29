@@ -1287,8 +1287,6 @@ function applyIntroLanguage(lang) {
   q('#leaderboardCloseBtn')?.setAttribute('aria-label', dictionary.closeLeaderboard);
   q('#introLanguageSelect')?.setAttribute('aria-label', dictionary.chooseLanguage);
   q('.certificate-close')?.setAttribute('aria-label', dictionary.closeCertificate);
-  q('#prevStep')?.setAttribute('aria-label', t('previousStep'));
-  q('#nextStep')?.setAttribute('aria-label', t('nextStep'));
   document.documentElement.lang = lang;
   renderCurrentLanguageState();
 }
@@ -1598,14 +1596,9 @@ function selectHomeCountry(key) {
   q('#gameName').textContent = c.game;
   q('#gameAlias').textContent = localizeCountryAlias(key);
   q('#description').textContent = localizeCountryDescription(key);
-  q('#previewImage').src = c.preview;
-  q('#previewImage').alt = `Preview of ${c.game}`;
-  q('#videoCaption').textContent = t('videoCaption', { game: c.game });
   qa('[data-country]').forEach(el => el.classList.toggle('active', el.dataset.country === key));
   refreshLeafletMarkers();
   updateCompletionMarkers();
-  homeStep = 0;
-  renderHomeStep();
 
   const exhibit = q('.exhibit');
   exhibit.animate([
@@ -1614,32 +1607,7 @@ function selectHomeCountry(key) {
   ], { duration: 260, easing: 'ease-out' });
 }
 
-let homeStep = 0;
-function renderHomeStep() {
-  const c = countries[selectedCountry];
-  q('#stepCount').textContent = t('stepCount', { current: homeStep + 1, total: 3 });
-  q('#stepText').textContent = c.steps[homeStep];
-  q('#stepFocus').style.left = `${homeStep * 33.333}%`;
-}
-
 qa('.game-card[data-country]').forEach(el => el.addEventListener('click', () => selectHomeCountry(el.dataset.country)));
-q('#nextStep').addEventListener('click', () => { homeStep = (homeStep + 1) % 3; renderHomeStep(); });
-q('#prevStep').addEventListener('click', () => { homeStep = (homeStep + 2) % 3; renderHomeStep(); });
-
-q('#videoPreview').addEventListener('click', () => {
-  const cap = q('#videoCaption');
-  const play = q('.play-button');
-  const el = q('#videoPreview');
-  if (!el.classList.contains('playing')) {
-    el.classList.add('playing');
-    play.textContent = 'Ⅱ';
-    cap.textContent = t('videoPlaying');
-  } else {
-    el.classList.remove('playing');
-    play.textContent = '▶';
-    cap.textContent = t('videoCaption', { game: countries[selectedCountry].game });
-  }
-});
 
 const aboutDialog = q('#aboutDialog');
 q('#aboutBtn').addEventListener('click', () => aboutDialog.showModal());

@@ -4,7 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#2d251a" />
-  <title>Games Across Time — Prototype</title>
+  <title>The Archives</title>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+
+  <!-- Link preview (Slack / Discord / iMessage / WhatsApp) -->
+  <meta name="description" content="A living archive of traditional play — explore cultures through games and collect passport stamps as you learn." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="The Archives" />
+  <meta property="og:title" content="The Archives" />
+  <meta property="og:description" content="A living archive of traditional play — explore cultures through games and collect passport stamps as you learn." />
+  <meta property="og:image" content="https://childgamee.netlify.app/games-across-time-draft/assets/reference.png" />
+  <meta name="twitter:card" content="summary_large_image" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -15,9 +25,9 @@
   <div class="page-noise" aria-hidden="true"></div>
 
   <aside class="sidebar" aria-label="Primary navigation">
-    <a class="brand" href="#home" aria-label="Games Across Time home" data-nav="home">
+    <a class="brand" href="#home" aria-label="The Archive — home" data-nav="home">
       <span class="brand-mark">古</span>
-      <span class="brand-name">Games<br><b>Across Time</b></span>
+      <span class="brand-name">The<br><b>Archive</b></span>
     </a>
 
     <nav class="nav-list">
@@ -223,25 +233,9 @@
           </div>
 
           <div class="preview-block">
-            <div class="block-title"><span data-i18n="gamePreview">Game preview</span><span>01:28</span></div>
-            <button class="video-preview" id="videoPreview" aria-label="Play game preview">
-              <img id="previewImage" src="assets/vn-preview.png" alt="Preview of Ô Ăn Quan" />
-              <span class="video-shade"></span>
-              <span class="play-button">▶</span>
-              <span class="video-caption" id="videoCaption">Watch the game being played</span>
-            </button>
-          </div>
-
-          <div class="how-block">
-            <div class="block-title"><span data-i18n="howPlayed">How it is played</span><span id="stepCount">Step 1 / 3</span></div>
-            <div class="how-visual">
-              <img src="assets/howto.png" alt="Illustrated steps showing how the game is played" />
-              <div class="step-focus" id="stepFocus"></div>
-            </div>
-            <div class="step-controls">
-              <button id="prevStep" aria-label="Previous step">←</button>
-              <p id="stepText">Players distribute pieces through the board’s small fields.</p>
-              <button id="nextStep" aria-label="Next step">→</button>
+            <div class="block-title"><span data-i18n="gamePreview">Game preview</span></div>
+            <div class="video-preview is-static">
+              <img src="assets/video-demo.png" alt="Video demo — upcoming feature, stay tuned" />
             </div>
           </div>
 

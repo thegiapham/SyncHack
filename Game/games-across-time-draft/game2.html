@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fanorona — Madagascar (Fanoron-Tsivy)</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -118,6 +119,39 @@
         border-bottom: 1px solid var(--line);
         padding-bottom: 2px;
       }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 11px;
+        text-decoration: none;
+        color: inherit;
+        margin-bottom: 18px;
+      }
+      .brand-mark {
+        width: 38px;
+        height: 38px;
+        border: 2px solid var(--gold-bright);
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-family: "Cormorant Garamond", serif;
+        font-size: 20px;
+        color: var(--gold);
+        box-shadow: inset 0 0 0 5px rgba(181, 138, 69, 0.09);
+        transition: background 0.18s ease, color 0.18s ease;
+      }
+      .brand-name {
+        font-family: "Cormorant Garamond", serif;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        font-size: 14px;
+        line-height: 1.03;
+        color: var(--ink);
+      }
+      .brand-name b { font-weight: 700; font-size: 15px; }
+      .brand:hover .brand-mark { background: var(--gold-bright); color: #fff; }
+      .brand:focus-visible { outline: 2px solid var(--gold-bright); outline-offset: 4px; border-radius: 4px; }
       .back-link:hover {
         color: var(--red);
       }
@@ -680,6 +714,11 @@
     <div class="page-noise" aria-hidden="true"></div>
 
     <div class="shell">
+      <a class="brand" href="index.html" aria-label="The Archive — home">
+        <span class="brand-mark">古</span>
+        <span class="brand-name">The<br /><b>Archive</b></span>
+      </a>
+
       <header class="masthead">
         <div>
           <p class="kicker">Madagascar · Merina highlands · c. 1680</p>

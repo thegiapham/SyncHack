@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#2d251a" />
+  <title>Games Across Time - Game View</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --paper:#d5b985;
+      --paper-light:#f7e3bc;
+      --ink:#2c2419;
+      --muted:#796446;
+      --line:rgba(84,58,31,.26);
+      --brown:#8b6331;
+      --dark:#22190f;
+    }
+    * { box-sizing:border-box; }
+    html, body { margin:0; min-height:100%; }
+    body {
+      min-height:100vh;
+      display:grid;
+      place-items:center;
+      padding:32px;
+      color:var(--ink);
+      font-family:Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 30% 20%, rgba(255,248,232,.34), transparent 34%),
+        linear-gradient(rgba(70,48,22,.08) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(70,48,22,.06) 1px, transparent 1px),
+        var(--paper);
+      background-size:auto, 16px 16px, 16px 16px, auto;
+    }
+    body::before {
+      content:"";
+      position:fixed;
+      inset:0;
+      pointer-events:none;
+      background-image:radial-gradient(rgba(45,35,20,.22) .7px, transparent .7px);
+      background-size:10px 10px;
+      opacity:.38;
+      mix-blend-mode:multiply;
+    }
+    .game-view {
+      position:relative;
+      z-index:1;
+      width:min(1180px, 100%);
+      display:grid;
+      gap:18px;
+    }
+    .game-top {
+      display:flex;
+      align-items:end;
+      justify-content:space-between;
+      gap:20px;
+    }
+    .kicker {
+      margin:0 0 8px;
+      color:var(--muted);
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.22em;
+      text-transform:uppercase;
+    }
+    h1 {
+      margin:0;
+      color:var(--ink);
+      font-family:"Cormorant Garamond", Georgia, serif;
+      font-size:clamp(42px, 5vw, 72px);
+      line-height:.92;
+      font-weight:700;
+    }
+    .game-country {
+      margin:0;
+      color:#6c5432;
+      font-family:"Cormorant Garamond", Georgia, serif;
+      font-size:24px;
+    }
+    .game-panel {
+      border:1px solid var(--line);
+      background:linear-gradient(180deg, rgba(255,248,232,.64), rgba(212,178,116,.38));
+      box-shadow:0 28px 70px rgba(46,32,16,.24);
+      padding:14px;
+    }
+    .game-frame-wrap {
+      width:100%;
+      aspect-ratio:16 / 10;
+      min-height:520px;
+      background:#0e0b08;
+      border:1px solid rgba(46,32,16,.5);
+      overflow:hidden;
+    }
+    iframe {
+      display:block;
+      width:100%;
+      height:100%;
+      border:0;
+      background:#0e0b08;
+    }
+    .game-actions {
+      display:flex;
+      justify-content:center;
+      gap:14px;
+      flex-wrap:wrap;
+      margin-top:16px;
+    }
+    button {
+      min-width:220px;
+      min-height:54px;
+      border:1px solid rgba(83,58,31,.34);
+      border-radius:8px;
+      background:linear-gradient(180deg, rgba(48,37,22,.92), rgba(33,27,19,.86));
+      color:#fff7de;
+      cursor:pointer;
+      font-family:"Cormorant Garamond", Georgia, serif;
+      font-size:20px;
+      font-weight:700;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      box-shadow:0 18px 42px rgba(0,0,0,.18);
+    }
+    button:hover { filter:brightness(1.08); }
+    .fallback {
+      min-height:420px;
+      display:grid;
+      place-items:center;
+      padding:28px;
+      text-align:center;
+      background:rgba(255,248,232,.58);
+    }
+    .fallback p {
+      max-width:520px;
+      margin:12px auto 0;
+      color:#5a472d;
+      font-family:"Cormorant Garamond", Georgia, serif;
+      font-size:22px;
+      line-height:1.35;
+    }
+    @media (max-width:760px) {
+      body { padding:16px; }
+      .game-top { display:grid; }
+      .game-frame-wrap { min-height:420px; aspect-ratio:3 / 4; }
+      button { width:100%; min-width:0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="game-view">
+    <header class="game-top">
+      <div>
+        <p class="kicker">Games Across Time - playable exhibit</p>
+        <h1 id="gameTitle">Loading game</h1>
+      </div>
+      <p class="game-country" id="gameCountry"></p>
+    </header>
+
+    <section class="game-panel" id="gamePanel" aria-label="Game container">
+      <div class="game-frame-wrap" id="gameFrameWrap">
+        <iframe id="gameFrame" title="Playable cultural game" allow="camera; microphone"></iframe>
+      </div>
+      <div class="game-actions">
+        <button type="button" id="expandGame">Expand / Full Screen</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const games = {
+      unitedKingdom: { title: 'Jacks / Fivestones', country: 'United Kingdom', src: '../rock-toss/index.html' },
+      greece: { title: 'Agalmata', country: 'Greece', src: '../agalmata/index.html' },
+      japan: { title: 'Fukuwarai', country: 'Japan', src: '../fukuwarai/index.html' },
+      southKorea: { title: 'Jegichagi', country: 'South Korea', src: '../jegichagi/index.html' }
+    };
+
+    const params = new URLSearchParams(location.search);
+    const countryKey = params.get('country') || '';
+    const game = games[countryKey];
+    const frame = document.getElementById('gameFrame');
+    const frameWrap = document.getElementById('gameFrameWrap');
+    let directGameUrl = '';
+
+    function returnToMap() {
+      location.href = 'index.html#worldmap';
+    }
+
+    function finishGame() {
+      if (!game) {
+        returnToMap();
+        return;
+      }
+      location.href = `index.html?complete=${encodeURIComponent(countryKey)}`;
+    }
+
+    if (!game) {
+      document.getElementById('gameTitle').textContent = 'Game not found';
+      frameWrap.className = 'fallback';
+      frameWrap.innerHTML = '<div><h1>Game not found</h1><p>Return to the atlas and choose a marked game again.</p></div>';
+    } else {
+      document.getElementById('gameTitle').textContent = game.title;
+      document.getElementById('gameCountry').textContent = game.country;
+      const src = new URL(game.src, location.href);
+      src.searchParams.set('embedded', '1');
+      src.searchParams.set('from', countryKey);
+      directGameUrl = src.href;
+      frame.src = directGameUrl;
+    }
+
+    document.getElementById('expandGame').addEventListener('click', () => {
+      if (directGameUrl) location.href = directGameUrl;
+    });
+
+    addEventListener('message', event => {
+      const data = event.data || {};
+      if (data.type === 'gat:exit-game') returnToMap();
+      if (data.type === 'gat:finish-game') finishGame();
+    });
+  </script>
+</body>
+</html>

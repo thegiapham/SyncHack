@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Agalmata — Ἀγάλματα (Statues)</title>
+<style>
+  :root{
+    --bg:#0c0e12; --ink:#f3efe6; --accent:#d9b46a; --good:#7ee0a5; --bad:#ff6b6b;
+    --panel:rgba(16,18,24,.74);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #game{position:absolute;inset:0;width:100%;height:100%}
+  .hud{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;
+    align-items:flex-start;pointer-events:none;gap:12px}
+  .badge{background:var(--panel);border:1px solid rgba(217,180,106,.4);backdrop-filter:blur(6px);
+    padding:10px 14px;border-radius:14px;font-weight:600;font-size:15px;letter-spacing:.2px}
+  .badge b{color:var(--accent)}
+  .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;gap:16px;pointer-events:none;padding:24px}
+  .card{background:var(--panel);border:1px solid rgba(217,180,106,.4);backdrop-filter:blur(8px);
+    padding:28px 34px;border-radius:22px;max-width:560px;pointer-events:auto}
+  h1{font-size:28px;margin:0 0 6px}
+  .kl{letter-spacing:3px;font-size:12px;color:var(--accent);text-transform:uppercase;margin:0 0 12px}
+  p{margin:8px 0;opacity:.92;line-height:1.5;font-size:15px}
+  .big{font-size:40px;font-weight:800;margin:2px 0}
+  .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+  button{font:inherit;font-weight:700;color:#1a140a;background:var(--accent);border:0;
+    padding:12px 20px;border-radius:999px;cursor:pointer;margin-top:6px}
+  button.pc{min-width:66px}
+  button:hover{filter:brightness(1.06)}
+  .exit-game{position:fixed;right:18px;bottom:18px;z-index:20;background:var(--panel);color:var(--ink);
+    border:1px solid rgba(217,180,106,.48);backdrop-filter:blur(6px);font-size:13px;padding:10px 14px}
+  .result-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+  .result-actions button{margin-top:0}
+  #finish{background:var(--good);color:#08170e}
+  .hint{font-size:13px;opacity:.75}
+  .spinner{width:38px;height:38px;border:4px solid rgba(217,180,106,.25);border-top-color:var(--accent);
+    border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="game"></canvas>
+  <button class="exit-game" id="exitGame" type="button">Exit Game</button>
+
+  <div class="hud">
+    <div class="badge" id="hudA">Agalmata</div>
+    <div class="badge" id="hudB">Best <b><span id="best">0</span></b></div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="card" id="card">
+      <div class="spinner"></div>
+      <p class="kl" style="margin-top:16px">Agalmata · Ἀγάλματα 🇬🇷</p>
+      <p>Loading pose tracking & camera…</p>
+      <p class="hint">Allow the camera prompt. Open over <b>http://localhost</b> (not file://).</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ------------------------------------------------------------------ *
+ *  TUNING
+ * ------------------------------------------------------------------ */
+const CONFIG = {
+  DANCE_MIN:      2200, DANCE_MAX: 4200,   // dance phase random length (ms)
+  STRIKE_MS:      2800,                     // time to get into the statue pose
+  HOLD_BASE:      2000, HOLD_STEP: 450, HOLD_MAX: 5000,
+  POSE_TOL:         48,                     // per-angle tolerance (deg); higher = forgiving
+  MATCH_PASS:     0.56,                     // avg match (0..1) to count as "in the pose"
+  STILL_THRESH:   0.08,                     // per-frame joint motion / shoulder width = "moving"
+  STILL_FRAMES:      2,                     // consecutive moving frames = out
+  VIS:             0.3,
+  MAX_PLAYERS:       4,
+};
+
+/* Statue pose library — each arm as vectors in screen space (x right, y DOWN).
+ * e = elbow dir from shoulder; w = wrist dir from elbow. L=left of screen, R=right. */
+const POSES = [
+  { name:"Victory",   L:{e:[-0.5,-0.87], w:[-0.5,-0.87]}, R:{e:[0.5,-0.87], w:[0.5,-0.87]} },
+  { name:"Atlas",     L:{e:[-1,0],       w:[-1,0]},        R:{e:[1,0],       w:[1,0]} },
+  { name:"The Guard", L:{e:[-1,0],       w:[0,-1]},        R:{e:[1,0],       w:[0,-1]} },
+  { name:"The Orator",L:{e:[-0.2,1],     w:[-0.2,1]},      R:{e:[1,0],       w:[1,0]} },
+  { name:"The Salute",L:{e:[-0.2,1],     w:[-0.2,1]},      R:{e:[0.6,-0.8],  w:[0.6,-0.8]} },
+  { name:"The Thinker",L:{e:[-0.2,1],    w:[-0.2,1]},      R:{e:[0.3,0.7],   w:[-0.15,-0.9]} },
+];
+
+const P_COLORS=["#7ee0a5","#5ec5ff","#ffd166","#ff8fa3"];
+
+/* ------------------------------------------------------------------ *
+ *  Elements & state
+ * ------------------------------------------------------------------ */
+const video=document.getElementById("cam");
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const overlay=document.getElementById("overlay");
+const card=document.getElementById("card");
+const hudA=document.getElementById("hudA");
+const hudB=document.getElementById("hudB");
+const elBest=document.getElementById("best");
+
+let W=0,H=0;
+function resize(){ W=canvas.width=innerWidth; H=canvas.height=innerHeight; }
+addEventListener("resize",resize); resize();
+
+let poseLM=null;
+let STATE="loading";     // loading | intro | dance | strike | hold | over
+let numPlayers=1;
+let players=[];
+let round=0;             // freezes completed (drives hold length)
+let phaseStart=0, danceDur=0, holdDur=0, curPose=null;
+let best=Number(localStorage.getItem("agalmata_best")||0);
+elBest.textContent=String(best);
+
+const UPPER=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]];
+const JOINTS=[0,11,12,13,14,15,16];
+
+/* ------------------------------------------------------------------ *
+ *  Audio
+ * ------------------------------------------------------------------ */
+let actx=null, lastBeat=0;
+function tone(freq,dur=0.08,type="sine",gain=0.15){
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(),g=actx.createGain();
+    o.type=type;o.frequency.value=freq;o.connect(g);g.connect(actx.destination);
+    g.gain.setValueAtTime(gain,actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+dur);
+    o.start();o.stop(actx.currentTime+dur);
+  }catch(e){}
+}
+
+function sendToWrapper(type){
+  if(window.parent && window.parent !== window){
+    window.parent.postMessage({ type }, "*");
+  }else{
+    const country = new URLSearchParams(window.location.search).get("from") || "greece";
+    window.location.href = type === "gat:finish-game"
+      ? `../games-across-time-draft/index.html?complete=${encodeURIComponent(country)}`
+      : "../games-across-time-draft/index.html#worldmap";
+  }
+}
+
+document.getElementById("exitGame").addEventListener("click", () => sendToWrapper("gat:exit-game"));
+
+/* ------------------------------------------------------------------ *
+ *  Setup
+ * ------------------------------------------------------------------ */
+async function init(){
+  try{
+    const fileset=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    poseLM=await PoseLandmarker.createFromOptions(fileset,{
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO", numPoses:CONFIG.MAX_PLAYERS,
+      minPoseDetectionConfidence:0.3, minPosePresenceConfidence:0.3, minTrackingConfidence:0.3
+    });
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false});
+    video.srcObject=stream; await video.play();
+    goIntro();
+    requestAnimationFrame(loop);
+  }catch(err){ showError(err); }
+}
+function showError(err){
+  STATE="error"; overlay.style.display="flex";
+  card.innerHTML=`<p class="kl">Agalmata</p><h1 style="color:var(--bad)">Can't start</h1>
+    <p>${(err&&err.message)?err.message:err}</p>
+    <p class="hint">Serve over <b>http://localhost</b> and allow the camera.</p>`;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Flow
+ * ------------------------------------------------------------------ */
+function goIntro(){
+  STATE="intro";
+  overlay.style.display="flex";
+  hudA.textContent="Agalmata"; hudB.innerHTML=`Best <b><span id="best">${best}</span></b>`;
+  card.innerHTML=`
+    <p class="kl">Agalmata · Ἀγάλματα 🇬🇷 · the statue game</p>
+    <h1>Become the statue 🏛️</h1>
+    <p><b>Dance</b> while the music plays — when it stops, <b>strike the statue pose</b>
+       and <b>hold perfectly still</b>. Any twitch and you're out.</p>
+    <p>Solo = survive as many freezes as you can. 2–4 players = <b>last statue standing wins</b>.</p>
+    <p class="hint">Everyone stands in their own lane, upper body in view. No feet needed.</p>
+    <p style="margin-top:6px"><b>How many players?</b></p>
+    <div class="row" id="pcRow"></div>`;
+  const row=document.getElementById("pcRow");
+  for(let n=1;n<=CONFIG.MAX_PLAYERS;n++){
+    const b=document.createElement("button"); b.className="pc";
+    b.textContent = n===1?"Solo":(n+" players");
+    b.onclick=()=>startGame(n);
+    row.appendChild(b);
+  }
+}
+function startGame(n){
+  numPlayers=n; round=0;
+  players=[];
+  for(let i=0;i<n;i++) players.push({
+    id:i, color:P_COLORS[i], alive:true, survived:0,
+    pts:null, lastPts:null, moving:0, match:0, still:1, reason:null
+  });
+  goDance();
+}
+function goDance(){
+  STATE="dance"; phaseStart=performance.now();
+  danceDur=CONFIG.DANCE_MIN+Math.random()*(CONFIG.DANCE_MAX-CONFIG.DANCE_MIN);
+  updateHud(); overlay.style.display="none"; tone(520,0.08,"triangle",0.16);
+}
+function goStrike(){
+  STATE="strike"; phaseStart=performance.now();
+  curPose=POSES[Math.floor(Math.random()*POSES.length)];
+  for(const p of players) p.match=0;
+  tone(300,0.16,"sawtooth",0.2);
+}
+function goHold(){
+  STATE="hold"; phaseStart=performance.now();
+  holdDur=Math.min(CONFIG.HOLD_BASE+round*CONFIG.HOLD_STEP, CONFIG.HOLD_MAX);
+  for(const p of players){ p.moving=0; p.still=1; p.lastPts=p.pts; }
+  tone(680,0.1,"triangle",0.18);
+}
+function evaluateStrike(){
+  for(const p of players){ if(!p.alive) continue;
+    if(p.match < CONFIG.MATCH_PASS){ p.alive=false; p.reason="missed the pose"; }
+  }
+  if(maybeEnd()) return;
+  goHold();
+}
+function resolveHold(){
+  for(const p of players) if(p.alive) p.survived++;
+  round++;
+  if(maybeEnd()) return;   // (multiplayer can't drop to <=1 here without maybeEnd firing earlier, but guard anyway)
+  goDance();
+}
+// returns true if the game ended
+function maybeEnd(){
+  if(STATE==="over") return true;
+  const alive=players.filter(p=>p.alive);
+  if(numPlayers>=2 && alive.length<=1){ endMatch(alive[0]||null); return true; }
+  if(numPlayers===1 && alive.length===0){ endSolo(); return true; }
+  return false;
+}
+function endSolo(){
+  const sc=players[0].survived;
+  if(sc>best){ best=sc; localStorage.setItem("agalmata_best",String(best)); }
+  STATE="over"; tone(160,0.3,"sawtooth",0.2);
+  overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kl">${players[0].reason||"run over"}</p>
+    <div class="big">${sc} statue${sc===1?'':'s'}</div>
+    <p>Best: <b>${best}</b></p>
+    <div class="result-actions">
+      <button id="again">Play again</button>
+      <button id="finish">Finish Game</button>
+    </div>`;
+  document.getElementById("again").onclick=goIntro;
+  document.getElementById("finish").onclick=()=>sendToWrapper("gat:finish-game");
+}
+function endMatch(winner){
+  STATE="over"; tone(winner?880:200,0.28,winner?"triangle":"sawtooth",0.2);
+  overlay.style.display="flex";
+  const title = winner
+    ? `<div class="big" style="color:${winner.color}">Player ${winner.id+1} wins! 🏆</div>
+       <p>Survived <b>${winner.survived}</b> freeze${winner.survived===1?'':'s'}.</p>`
+    : `<div class="big">It's a tie!</div><p>Everyone froze out at once.</p>`;
+  card.innerHTML=`
+    <p class="kl">Last statue standing</p>
+    ${title}
+    <div class="result-actions">
+      <button id="again">Play again</button>
+      <button id="finish">Finish Game</button>
+    </div>`;
+  document.getElementById("again").onclick=goIntro;
+  document.getElementById("finish").onclick=()=>sendToWrapper("gat:finish-game");
+}
+
+function updateHud(){
+  if(numPlayers===1){ hudA.innerHTML=`Freeze <b>#${round+1}</b>`; hudB.innerHTML=`Best <b>${best}</b>`; }
+  else { const a=players.filter(p=>p.alive).length;
+    hudA.innerHTML=`Round <b>#${round+1}</b>`; hudB.innerHTML=`Alive <b>${a}/${numPlayers}</b>`; }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Pose maths
+ * ------------------------------------------------------------------ */
+function angBetween(a,b){
+  const dot=a[0]*b[0]+a[1]*b[1];
+  const m=(Math.hypot(a[0],a[1])*Math.hypot(b[0],b[1]))||1;
+  return Math.acos(Math.max(-1,Math.min(1,dot/m)))*180/Math.PI;
+}
+function armAngles(S,E,Wr){
+  const eVec=[E.x-S.x,E.y-S.y], wVec=[Wr.x-E.x,Wr.y-E.y];
+  return { elev:angBetween(eVec,[0,1]), bend:angBetween([-eVec[0],-eVec[1]],wVec) };
+}
+function targetAngles(arm){
+  return { elev:angBetween(arm.e,[0,1]), bend:angBetween([-arm.e[0],-arm.e[1]],arm.w) };
+}
+function matchArm(S,E,Wr,arm){
+  const t=targetAngles(arm), a=armAngles(S,E,Wr);
+  const eScore=Math.max(0,1-Math.abs(a.elev-t.elev)/CONFIG.POSE_TOL);
+  if(Wr.v<CONFIG.VIS) return eScore;
+  const bScore=Math.max(0,1-Math.abs(a.bend-t.bend)/CONFIG.POSE_TOL);
+  return eScore*0.6+bScore*0.4;
+}
+function poseMatch(pts,pose){
+  return (matchArm(pts[11],pts[13],pts[15],pose.L)+matchArm(pts[12],pts[14],pts[16],pose.R))/2;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Pose processing → all poses, assigned to lanes
+ * ------------------------------------------------------------------ */
+function processPoses(now){
+  if(!poseLM || video.readyState<2) return [];
+  let res; try{ res=poseLM.detectForVideo(video,now); }catch(e){ return []; }
+  if(!res||!res.landmarks) return [];
+  return res.landmarks.map(lm=>lm.map(p=>({x:(1-p.x)*W,y:p.y*H,v:(p.visibility??1)})));
+}
+function assignLanes(all){
+  const slots=new Array(numPlayers).fill(null);
+  const zw=W/numPlayers;
+  for(const pts of all){
+    if(pts[11].v<CONFIG.VIS && pts[12].v<CONFIG.VIS) continue;
+    const cx=(pts[11].x+pts[12].x)/2;
+    let zi=Math.max(0,Math.min(numPlayers-1,Math.floor(cx/zw)));
+    if(!slots[zi]) slots[zi]=pts;
+    else{
+      const zc=(zi+0.5)*zw;
+      const dOld=Math.abs((slots[zi][11].x+slots[zi][12].x)/2-zc), dNew=Math.abs(cx-zc);
+      if(dNew<dOld) slots[zi]=pts;
+    }
+  }
+  return slots;
+}
+function upperVisible(pts){ return pts && [11,12,13,14,15,16].every(i=>pts[i].v>=CONFIG.VIS); }
+function motionSince(cur,prev){
+  if(!cur||!prev) return 0;
+  const sw=Math.hypot(cur[11].x-cur[12].x,cur[11].y-cur[12].y)||1;
+  let s=0; for(const i of JOINTS) s+=Math.hypot(cur[i].x-prev[i].x,cur[i].y-prev[i].y);
+  return (s/JOINTS.length)/sw;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Loop
+ * ------------------------------------------------------------------ */
+function loop(){
+  const now=performance.now();
+  const active = STATE==="dance"||STATE==="strike"||STATE==="hold";
+
+  if(active && players.length){
+    const slots=assignLanes(processPoses(now));
+    for(let i=0;i<numPlayers;i++) players[i].pts=slots[i];
+
+    if(STATE==="dance"){
+      if(now-lastBeat>440){ lastBeat=now; tone(120,0.09,"sine",0.22); tone(240,0.04,"square",0.05); }
+      if(now-phaseStart>=danceDur) goStrike();
+    }
+    else if(STATE==="strike"){
+      for(const p of players){ if(p.alive && upperVisible(p.pts)) p.match=poseMatch(p.pts,curPose); }
+      if(now-phaseStart>=CONFIG.STRIKE_MS) evaluateStrike();
+    }
+    else if(STATE==="hold"){
+      for(const p of players){
+        if(!p.alive) continue;
+        const m=motionSince(p.pts,p.lastPts);
+        p.still=Math.max(0,1-m/(CONFIG.STILL_THRESH*2));
+        if(p.pts){ if(m>CONFIG.STILL_THRESH){ if(++p.moving>=CONFIG.STILL_FRAMES){ p.alive=false; p.reason="you moved!"; } } else p.moving=0; }
+      }
+      if(!maybeEnd() && now-phaseStart>=holdDur) resolveHold();
+    }
+
+    for(const p of players) p.lastPts=p.pts;
+    updateHud();
+  }
+
+  render(now);
+  requestAnimationFrame(loop);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Rendering
+ * ------------------------------------------------------------------ */
+function drawSkeleton(pts,color,dim){
+  if(!pts) return;
+  ctx.globalAlpha=dim?0.5:1;
+  ctx.strokeStyle=color; ctx.lineWidth=4; ctx.lineCap="round";
+  for(const [a,b] of UPPER){
+    if(pts[a].v<CONFIG.VIS||pts[b].v<CONFIG.VIS) continue;
+    ctx.beginPath(); ctx.moveTo(pts[a].x,pts[a].y); ctx.lineTo(pts[b].x,pts[b].y); ctx.stroke();
+  }
+  ctx.fillStyle=color;
+  for(const i of [11,12,13,14,15,16]){ if(pts[i].v<CONFIG.VIS) continue;
+    ctx.beginPath(); ctx.arc(pts[i].x,pts[i].y,6,0,Math.PI*2); ctx.fill(); }
+  ctx.globalAlpha=1;
+}
+function norm(v){ const m=Math.hypot(v[0],v[1])||1; return [v[0]/m,v[1]/m]; }
+function drawGuide(pose,alpha,cx){
+  const cy=H*0.36, sw=Math.min(W,H)*0.15, seg=Math.min(W,H)*0.12;
+  const SL={x:cx-sw/2,y:cy}, SR={x:cx+sw/2,y:cy};
+  ctx.save(); ctx.globalAlpha=alpha;
+  ctx.strokeStyle="rgba(217,180,106,.95)"; ctx.lineWidth=9; ctx.lineCap="round"; ctx.lineJoin="round";
+  const hipL={x:cx-sw*0.34,y:cy+seg*1.5}, hipR={x:cx+sw*0.34,y:cy+seg*1.5};
+  ctx.beginPath(); ctx.moveTo(SL.x,SL.y); ctx.lineTo(SR.x,SR.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(SL.x,SL.y); ctx.lineTo(hipL.x,hipL.y);
+  ctx.moveTo(SR.x,SR.y); ctx.lineTo(hipR.x,hipR.y); ctx.lineTo(hipL.x,hipL.y); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy-seg*0.62,seg*0.32,0,Math.PI*2); ctx.stroke();
+  for(const [S,arm] of [[SL,pose.L],[SR,pose.R]]){
+    const e=norm(arm.e), w=norm(arm.w);
+    const E={x:S.x+e[0]*seg,y:S.y+e[1]*seg}, Wr={x:E.x+w[0]*seg,y:E.y+w[1]*seg};
+    ctx.beginPath(); ctx.moveTo(S.x,S.y); ctx.lineTo(E.x,E.y); ctx.lineTo(Wr.x,Wr.y); ctx.stroke();
+    ctx.fillStyle="rgba(217,180,106,.95)"; ctx.beginPath(); ctx.arc(Wr.x,Wr.y,8,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){ r=Math.min(r,w/2,h/2);
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function headBar(pts,frac,col,label){
+  if(!pts) return;
+  const x=(pts[11].x+pts[12].x)/2, y=Math.min(pts[11].y,pts[12].y)-64, w=120;
+  ctx.fillStyle="rgba(255,255,255,.15)"; roundRect(x-w/2,y,w,12,6); ctx.fill();
+  ctx.fillStyle=col; roundRect(x-w/2,y,w*Math.max(0,Math.min(1,frac)),12,6); ctx.fill();
+  if(label){ ctx.textAlign="center"; ctx.fillStyle="rgba(255,255,255,.85)";
+    ctx.font="600 13px Inter, sans-serif"; ctx.fillText(label,x,y-6); }
+}
+function outTag(pts){
+  if(!pts) return;
+  const x=(pts[11].x+pts[12].x)/2, y=Math.min(pts[11].y,pts[12].y)-40;
+  ctx.textAlign="center"; ctx.fillStyle="var(--bad)"; ctx.font="800 26px Inter, sans-serif";
+  ctx.fillText("OUT", x, y);
+}
+
+function render(now){
+  ctx.clearRect(0,0,W,H);
+
+  // lane dividers (multi)
+  if(numPlayers>1){
+    ctx.strokeStyle="rgba(217,180,106,.18)"; ctx.lineWidth=2; ctx.setLineDash([10,10]);
+    for(let i=1;i<numPlayers;i++){ const x=i*W/numPlayers;
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    ctx.setLineDash([]);
+  }
+
+  if(STATE==="dance"){
+    for(const p of players) drawSkeleton(p.pts,p.color,false);
+    const pulse=0.6+0.4*Math.sin(now/120);
+    ctx.textAlign="center"; ctx.fillStyle=`rgba(255,255,255,${pulse})`;
+    ctx.font="800 64px Inter, sans-serif"; ctx.fillText("DANCE!",W/2,H*0.14);
+  }
+
+  if(STATE==="strike"){
+    // one guide per lane so everyone can see it in their space
+    if(numPlayers===1) drawGuide(curPose,0.9,W/2);
+    else for(let i=0;i<numPlayers;i++) drawGuide(curPose,0.85,(i+0.5)*W/numPlayers);
+    for(const p of players){
+      if(!p.alive){ drawSkeleton(p.pts,"#ff6b6b",true); outTag(p.pts); continue; }
+      const pass=p.match>=CONFIG.MATCH_PASS;
+      drawSkeleton(p.pts,pass?"#7ee0a5":p.color,false);
+      headBar(p.pts,p.match,pass?"rgba(126,224,165,.95)":"rgba(217,180,106,.9)",pass?"matched!":"match it");
+    }
+    const left=Math.ceil((CONFIG.STRIKE_MS-(now-phaseStart))/1000);
+    ctx.textAlign="center"; ctx.fillStyle="var(--accent)"; ctx.font="800 60px Inter, sans-serif";
+    ctx.fillText("FREEZE!",W/2,H*0.14);
+    ctx.fillStyle="rgba(255,255,255,.9)"; ctx.font="600 22px Inter, sans-serif";
+    ctx.fillText(`strike “${curPose.name}” — ${left}`,W/2,H*0.14+38);
+  }
+
+  if(STATE==="hold"){
+    if(numPlayers===1) drawGuide(curPose,0.22,W/2);
+    else for(let i=0;i<numPlayers;i++) drawGuide(curPose,0.2,(i+0.5)*W/numPlayers);
+    for(const p of players){
+      if(!p.alive){ drawSkeleton(p.pts,"#ff6b6b",true); outTag(p.pts); continue; }
+      drawSkeleton(p.pts,"rgba(243,239,230,.95)",false);
+      headBar(p.pts,p.still,p.still>0.6?"rgba(126,224,165,.95)":"rgba(255,107,107,.95)","hold");
+    }
+    const left=Math.max(0,(holdDur-(now-phaseStart))/1000);
+    ctx.textAlign="center"; ctx.fillStyle="#fff"; ctx.font="800 60px Inter, sans-serif";
+    ctx.fillText("HOLD STILL",W/2,H*0.14);
+    ctx.fillStyle="rgba(255,255,255,.9)"; ctx.font="600 22px Inter, sans-serif";
+    ctx.fillText(`${left.toFixed(1)}s`,W/2,H*0.14+38);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

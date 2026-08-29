@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fukuwarai — 福笑い</title>
+<style>
+  :root{
+    --bg:#140f14; --ink:#fdeef0; --accent:#ff8fa3; --gold:#ffd166; --good:#57d38c; --bad:#ff6b6b;
+    --panel:rgba(28,18,24,.74);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #game{position:absolute;inset:0;width:100%;height:100%}
+  .hud{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;
+    align-items:flex-start;pointer-events:none;gap:12px}
+  .badge{background:var(--panel);border:1px solid rgba(255,143,163,.35);backdrop-filter:blur(6px);
+    padding:10px 14px;border-radius:14px;font-weight:600;font-size:15px;letter-spacing:.2px}
+  .badge b{color:var(--accent)}
+  .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;gap:16px;pointer-events:none;padding:24px}
+  .center.bottom{justify-content:flex-end;padding-bottom:34px}
+  .card{background:var(--panel);border:1px solid rgba(255,143,163,.35);backdrop-filter:blur(8px);
+    padding:26px 32px;border-radius:22px;max-width:540px;pointer-events:auto}
+  h1{font-size:28px;margin:0 0 6px}
+  .kick-label{letter-spacing:3px;font-size:12px;color:var(--accent);text-transform:uppercase;margin:0 0 12px}
+  p{margin:8px 0;opacity:.92;line-height:1.5;font-size:15px}
+  .big{font-size:40px;font-weight:800;margin:2px 0}
+  .verdict{font-size:22px;font-weight:700;color:var(--gold)}
+  button{font:inherit;font-weight:700;color:#2a121a;background:var(--accent);border:0;
+    padding:12px 22px;border-radius:999px;cursor:pointer;margin-top:12px}
+  button:hover{filter:brightness(1.06)}
+  .exit-game{position:fixed;right:18px;bottom:18px;z-index:20;background:var(--panel);color:var(--ink);
+    border:1px solid rgba(255,143,163,.45);backdrop-filter:blur(6px);font-size:13px;padding:10px 14px}
+  .result-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+  .result-actions button{margin-top:0}
+  #finish{background:var(--good);color:#07180f}
+  .hint{font-size:13px;opacity:.75}
+  .spinner{width:38px;height:38px;border:4px solid rgba(255,143,163,.25);border-top-color:var(--accent);
+    border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="game"></canvas>
+  <button class="exit-game" id="exitGame" type="button">Exit Game</button>
+
+  <div class="hud">
+    <div class="badge">Placing <b><span id="progress">–</span></b></div>
+    <div class="badge">✊ carry · 🖐 open to drop</div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="card" id="card">
+      <div class="spinner"></div>
+      <p class="kick-label" style="margin-top:16px">Fukuwarai · 福笑い 🇯🇵</p>
+      <p>Loading hand tracking & camera…</p>
+      <p class="hint">Allow the camera prompt. Open over <b>http://localhost</b> (not file://).</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ------------------------------------------------------------------ *
+ *  TUNING
+ * ------------------------------------------------------------------ */
+const CONFIG = {
+  MEMORIZE_MS:   3800,   // time to study the blank face before the blindfold
+  OPEN_TO_DROP:     4,   // fingers that must be extended (open hand) to release the piece
+  REARM_FINGERS:    2,   // must close back to this many (or fewer) before another drop
+  DARK_ALPHA:    0.82,   // how dark the "blindfold" screen is while placing
+  GOOD_ERR:      0.55,   // placement error (fraction of face size) that still counts as "on target"
+};
+
+// features placed in order; ideal position is relative to the face center (fractions of face radius)
+const FEATURES = [
+  { key:"eyebrows", label:"the EYEBROWS", ix:0.00, iy:-0.55 },
+  { key:"leftEye",  label:"the LEFT eye", ix:-0.42, iy:-0.20 },
+  { key:"rightEye", label:"the RIGHT eye", ix:0.42, iy:-0.20 },
+  { key:"nose",     label:"the NOSE",     ix:0.00, iy:0.08 },
+  { key:"mouth",    label:"the MOUTH",    ix:0.00, iy:0.48 },
+];
+
+/* ------------------------------------------------------------------ *
+ *  Elements & state
+ * ------------------------------------------------------------------ */
+const video   = document.getElementById("cam");
+const canvas  = document.getElementById("game");
+const ctx     = canvas.getContext("2d");
+const overlay = document.getElementById("overlay");
+const card    = document.getElementById("card");
+const elProg  = document.getElementById("progress");
+
+let W=0,H=0, face=null;
+function resize(){
+  W=canvas.width=innerWidth; H=canvas.height=innerHeight;
+  const r=Math.min(W,H);
+  const rx=r*0.21, ry=r*0.26;
+  if(!face) face={ cx:W*0.5, cy:H*0.4, rx, ry };
+  else { face.rx=rx; face.ry=ry; clampFace(); }
+}
+function clampFace(){
+  // keep the face in the upper area so the bottom result card never covers it
+  face.cx=Math.max(face.rx+30, Math.min(W-face.rx-30, face.cx));
+  face.cy=Math.max(face.ry+30, Math.min(H*0.5, face.cy));
+}
+function randomizeFace(){
+  face.cx = face.rx+40 + Math.random()*(W-2*face.rx-80);
+  face.cy = face.ry+40 + Math.random()*(H*0.5 - face.ry-40);
+}
+addEventListener("resize", resize); resize();
+
+let handLandmarker=null;
+let STATE="loading";           // loading | memorize | placing | reveal
+let lastTime=performance.now();
+let memStart=0;
+let current=0;                 // index into FEATURES
+let placed=[];                 // {key,x,y}
+let score=0, verdict="";
+// open-hand-to-drop state (must close the hand between drops)
+let dropArmed=true;
+
+/* ------------------------------------------------------------------ *
+ *  Audio
+ * ------------------------------------------------------------------ */
+let actx=null;
+function beep(freq,dur=0.08,type="sine",gain=0.15){
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(),g=actx.createGain();
+    o.type=type;o.frequency.value=freq;o.connect(g);g.connect(actx.destination);
+    g.gain.setValueAtTime(gain,actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+dur);
+    o.start();o.stop(actx.currentTime+dur);
+  }catch(e){}
+}
+
+function sendToWrapper(type){
+  if(window.parent && window.parent !== window){
+    window.parent.postMessage({ type }, "*");
+  }else{
+    const country = new URLSearchParams(window.location.search).get("from") || "japan";
+    window.location.href = type === "gat:finish-game"
+      ? `../games-across-time-draft/index.html?complete=${encodeURIComponent(country)}`
+      : "../games-across-time-draft/index.html#worldmap";
+  }
+}
+
+document.getElementById("exitGame").addEventListener("click", () => sendToWrapper("gat:exit-game"));
+
+/* ------------------------------------------------------------------ *
+ *  Setup
+ * ------------------------------------------------------------------ */
+async function init(){
+  try{
+    const fileset=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    handLandmarker=await HandLandmarker.createFromOptions(fileset,{
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO", numHands:1
+    });
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false});
+    video.srcObject=stream; await video.play();
+    goIntro();
+    requestAnimationFrame(loop);
+  }catch(err){ showError(err); }
+}
+function showError(err){
+  STATE="error"; overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">Fukuwarai</p>
+    <h1 style="color:var(--bad)">Can't start</h1>
+    <p>${(err&&err.message)?err.message:err}</p>
+    <p class="hint">Serve over <b>http://localhost</b> and allow the camera.</p>`;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Flow
+ * ------------------------------------------------------------------ */
+function goIntro(){
+  STATE="intro";
+  current=0; placed=[];
+  overlay.classList.remove("bottom");
+  elProg.textContent="–";
+  randomizeFace();
+  overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">Fukuwarai · 福笑い 🇯🇵 · a New Year game</p>
+    <h1>Build the face… blindfolded 🙈</h1>
+    <p>An old Japanese New Year game. The blank face appears somewhere on screen —
+       <b>memorize where it is</b>.</p>
+    <p>Then the lights go out and you place the eyebrows, eyes, nose and mouth
+       <b>from memory</b>: carry each piece in a <b>fist ✊</b>, move it into place,
+       then <b>open your hand 🖐</b> to drop it.</p>
+    <p class="hint">The wonkier the face, the funnier — that's the whole point.</p>
+    <button id="start">Start</button>`;
+  document.getElementById("start").onclick=goMemorize;
+}
+function goMemorize(){ STATE="memorize"; memStart=performance.now(); overlay.style.display="none"; beep(680,0.09,"triangle",0.16); }
+function goPlacing(){
+  STATE="placing"; current=0;
+  dropArmed=true;
+  updateProgress(); beep(520,0.08,"square",0.14);
+}
+function updateProgress(){ elProg.textContent=`${current+1}/${FEATURES.length} · ${FEATURES[current].label}`; }
+
+function dropFeature(x,y){
+  placed.push({ key:FEATURES[current].key, x, y });
+  beep(600+current*70,0.06,"triangle",0.16);
+  current++;
+  if(current>=FEATURES.length){ goReveal(); }
+  else updateProgress();
+}
+
+function goReveal(){
+  STATE="reveal";
+  // score: average closeness of each placed feature to its ideal spot
+  let sum=0;
+  for(const f of FEATURES){
+    const p=placed.find(q=>q.key===f.key); if(!p) continue;
+    const ix=face.cx+f.ix*face.rx, iy=face.cy+f.iy*face.ry;
+    const err=Math.hypot(p.x-ix,p.y-iy)/((face.rx+face.ry));
+    sum += Math.max(0, 1 - err/CONFIG.GOOD_ERR);
+  }
+  score=Math.round(100*sum/FEATURES.length);
+  verdict = score>=85 ? "Almost perfect — good fortune this year! 🎉"
+          : score>=65 ? "Definitely a face. Nicely done!"
+          : score>=45 ? "…modern art, really."
+          : score>=25 ? "Picasso would be proud. 🎨"
+          :             "Beautifully, gloriously wrong. 😆";
+  beep(880,0.2,"triangle",0.2);
+  overlay.classList.add("bottom");
+  overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">The reveal — your masterpiece is above ↑</p>
+    <div class="big">${score}% face</div>
+    <p class="verdict">${verdict}</p>
+    <div class="result-actions">
+      <button id="again">Play again</button>
+      <button id="finish">Finish Game</button>
+    </div>`;
+  document.getElementById("again").onclick=goIntro;
+  document.getElementById("finish").onclick=()=>sendToWrapper("gat:finish-game");
+}
+
+/* ------------------------------------------------------------------ *
+ *  Hand processing → palm cursor + pinch
+ * ------------------------------------------------------------------ */
+function processHand(now){
+  if(!handLandmarker || video.readyState<2) return null;
+  let res; try{ res=handLandmarker.detectForVideo(video,now); }catch(e){ return null; }
+  if(!res||!res.landmarks||!res.landmarks.length) return null;
+  const lm=res.landmarks[0];
+  const P=i=>({x:(1-lm[i].x)*W,y:lm[i].y*H});
+  const pts=lm.map((_,i)=>P(i));
+  const idx=[0,5,9,13,17]; let cx=0,cy=0;
+  for(const i of idx){ cx+=pts[i].x; cy+=pts[i].y; } cx/=idx.length; cy/=idx.length;
+  // count extended fingers: a finger is "up" when its tip is farther from the
+  // wrist than its PIP joint (rotation-independent)
+  const d=(a,b)=>Math.hypot(pts[a].x-pts[b].x,pts[a].y-pts[b].y);
+  let fingers=0;
+  for(const [tip,pip] of [[8,6],[12,10],[16,14],[20,18]]) if(d(tip,0) > d(pip,0)) fingers++;
+  return { x:cx, y:cy, fingers, pts };
+}
+
+/* ------------------------------------------------------------------ *
+ *  Loop
+ * ------------------------------------------------------------------ */
+function loop(){
+  const now=performance.now();
+  lastTime=now;
+  const hand=processHand(now);
+
+  if(STATE==="memorize" && now-memStart>=CONFIG.MEMORIZE_MS){ goPlacing(); }
+
+  if(STATE==="placing" && hand){
+    // open-hand-to-drop: carry in a fist, open all fingers to release.
+    // must close back down before another drop can register.
+    if(hand.fingers <= CONFIG.REARM_FINGERS) dropArmed=true;
+    if(dropArmed && hand.fingers >= CONFIG.OPEN_TO_DROP){
+      dropArmed=false;
+      dropFeature(hand.x, hand.y);
+    }
+  }
+
+  render(hand,now);
+  requestAnimationFrame(loop);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Drawing the face + features
+ * ------------------------------------------------------------------ */
+function faceOval(){
+  ctx.beginPath();
+  ctx.ellipse(face.cx,face.cy,face.rx,face.ry,0,0,Math.PI*2);
+}
+function drawBoard(){
+  // parchment skin face (Otafuku style)
+  ctx.save();
+  faceOval();
+  const g=ctx.createRadialGradient(face.cx-face.rx*0.3,face.cy-face.ry*0.3,face.rx*0.2,face.cx,face.cy,face.rx*1.2);
+  g.addColorStop(0,"#fff2e0"); g.addColorStop(1,"#f4d7bf");
+  ctx.fillStyle=g; ctx.fill();
+  ctx.lineWidth=6; ctx.strokeStyle="rgba(120,70,60,.5)"; ctx.stroke();
+  // rosy cheeks
+  ctx.fillStyle="rgba(255,140,150,.35)";
+  ctx.beginPath(); ctx.ellipse(face.cx-face.rx*0.55,face.cy+face.ry*0.2,face.rx*0.2,face.ry*0.13,0,0,7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(face.cx+face.rx*0.55,face.cy+face.ry*0.2,face.rx*0.2,face.ry*0.13,0,0,7); ctx.fill();
+  ctx.restore();
+}
+function drawFeature(key,x,y,s,ghost){
+  ctx.save(); ctx.translate(x,y);
+  ctx.globalAlpha = ghost?0.28:1;
+  const dark="#2a1c18", red="#c0392b";
+  if(key==="leftEye"||key==="rightEye"){
+    ctx.fillStyle=dark;
+    ctx.beginPath(); ctx.ellipse(0,0,s*0.5,s*0.34,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(s*0.12,-s*0.06,s*0.1,0,7); ctx.fill();
+  } else if(key==="eyebrows"){
+    ctx.strokeStyle=dark; ctx.lineWidth=s*0.22; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(-s*0.95,0); ctx.quadraticCurveTo(-s*0.55,-s*0.28,-s*0.15,-s*0.05); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s*0.15,-s*0.05); ctx.quadraticCurveTo(s*0.55,-s*0.28,s*0.95,0); ctx.stroke();
+  } else if(key==="nose"){
+    ctx.fillStyle="#e8a678"; ctx.strokeStyle="rgba(120,70,60,.6)"; ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(0,-s*0.5); ctx.quadraticCurveTo(s*0.5,s*0.2,0,s*0.5); ctx.quadraticCurveTo(-s*0.5,s*0.2,0,-s*0.5);
+    ctx.fill(); ctx.stroke();
+  } else if(key==="mouth"){
+    ctx.fillStyle=red;
+    ctx.beginPath();
+    ctx.moveTo(-s*0.8,0); ctx.quadraticCurveTo(0,-s*0.35,s*0.8,0);
+    ctx.quadraticCurveTo(0,s*0.55,-s*0.8,0); ctx.fill();
+    ctx.strokeStyle="rgba(120,20,20,.6)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(-s*0.8,0); ctx.quadraticCurveTo(0,s*0.05,s*0.8,0); ctx.stroke();
+  }
+  ctx.restore();
+}
+function featSize(key){
+  const u=Math.min(face.rx,face.ry);
+  return key==="eyebrows"? u*0.5 : key==="mouth"? u*0.38 : key==="nose"? u*0.34 : u*0.22;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Render
+ * ------------------------------------------------------------------ */
+function render(hand,now){
+  ctx.clearRect(0,0,W,H);
+
+  if(STATE==="memorize"){
+    drawBoard();
+    const left=Math.ceil((CONFIG.MEMORIZE_MS-(now-memStart))/1000);
+    ctx.fillStyle="rgba(255,255,255,.92)"; ctx.textAlign="center";
+    ctx.font="800 64px Inter, sans-serif"; ctx.fillText(String(left), face.cx, face.cy-face.ry-30);
+    ctx.font="600 22px Inter, sans-serif"; ctx.fillText("memorize the face…", face.cx, face.cy-face.ry+2);
+  }
+
+  if(STATE==="placing"){
+    // BLINDFOLD: darken the whole screen — place from memory.
+    ctx.fillStyle=`rgba(10,6,9,${CONFIG.DARK_ALPHA})`;
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle="rgba(255,255,255,.5)"; ctx.textAlign="center";
+    ctx.font="600 16px Inter, sans-serif";
+    ctx.fillText("🙈  lights out — place from memory", W/2, 92);
+
+    // held feature follows the hand; cursor turns green when hand is open (releasing)
+    if(hand){
+      const f=FEATURES[current];
+      const open = hand.fingers >= CONFIG.OPEN_TO_DROP;
+      ctx.beginPath(); ctx.arc(hand.x,hand.y,24,0,Math.PI*2);
+      ctx.strokeStyle = open ? "rgba(87,211,140,.95)" : "rgba(255,143,163,.7)";
+      ctx.lineWidth=4; ctx.stroke();
+      drawCursor(hand.x,hand.y);
+      // light halo behind the carried piece so dark pieces (eyes) are visible in the dark
+      const hx=hand.x, hy=hand.y-52, hs=featSize(f.key);
+      const halo=ctx.createRadialGradient(hx,hy,2,hx,hy,hs*1.9);
+      halo.addColorStop(0,"rgba(255,255,255,.92)");
+      halo.addColorStop(0.7,"rgba(255,255,255,.55)");
+      halo.addColorStop(1,"rgba(255,255,255,0)");
+      ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(hx,hy,hs*1.9,0,Math.PI*2); ctx.fill();
+      drawFeature(f.key, hx, hy, hs, false);
+      ctx.fillStyle="rgba(255,255,255,.92)"; ctx.textAlign="center";
+      ctx.font="700 20px Inter, sans-serif";
+      ctx.fillText("place "+f.label, hand.x, hand.y-52-featSize(f.key)-16);
+      ctx.font="600 15px Inter, sans-serif"; ctx.fillStyle="rgba(255,255,255,.7)";
+      ctx.fillText(open?"🖐 releasing…":"✊ open hand to drop", hand.x, hand.y+44);
+    } else {
+      ctx.fillStyle="rgba(255,255,255,.9)"; ctx.textAlign="center";
+      ctx.font="600 22px Inter, sans-serif";
+      ctx.fillText("✋ raise your hand to place the piece", W/2, H*0.5);
+    }
+  }
+
+  if(STATE==="reveal"){
+    drawBoard();
+    // only the player's actual placements — no "ideal" ghost
+    for(const p of placed){ drawFeature(p.key, p.x, p.y, featSize(p.key), false); }
+  }
+}
+
+function drawCursor(x,y){
+  ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2);
+  ctx.fillStyle="rgba(255,143,163,.9)"; ctx.fill();
+  ctx.beginPath(); ctx.arc(x,y,20,0,Math.PI*2);
+  ctx.strokeStyle="rgba(255,143,163,.5)"; ctx.lineWidth=2; ctx.stroke();
+}
+function roundRect(x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+
+init();
+</script>
+</body>
+</html>

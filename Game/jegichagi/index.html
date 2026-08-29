@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Jegichagi — 제기차기</title>
+<style>
+  :root{
+    --bg:#0b0d10; --ink:#eef2f6; --accent:#5ec5ff; --good:#57d38c; --bad:#ff6b6b;
+    --panel:rgba(12,16,22,.72);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #game{position:absolute;inset:0;width:100%;height:100%}
+  .hud{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;
+    align-items:flex-start;pointer-events:none;gap:12px}
+  .badge{background:var(--panel);border:1px solid rgba(94,197,255,.35);backdrop-filter:blur(6px);
+    padding:10px 14px;border-radius:14px;font-weight:600;font-size:15px;letter-spacing:.2px}
+  .badge b{color:var(--accent)}
+  .kicks{font-size:22px}
+  .kicks b{font-size:30px}
+  .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;gap:16px;pointer-events:none;padding:24px}
+  .card{background:var(--panel);border:1px solid rgba(94,197,255,.35);backdrop-filter:blur(8px);
+    padding:28px 34px;border-radius:22px;max-width:520px;pointer-events:auto}
+  h1{font-size:30px;margin:0 0 6px}
+  .kick-label{letter-spacing:3px;font-size:12px;color:var(--accent);text-transform:uppercase;margin:0 0 14px}
+  p{margin:8px 0;opacity:.9;line-height:1.5;font-size:15px}
+  .big{font-size:44px;font-weight:800;margin:2px 0}
+  .win{color:var(--good)} .lose{color:var(--bad)}
+  button{font:inherit;font-weight:700;color:#08121a;background:var(--accent);border:0;
+    padding:12px 22px;border-radius:999px;cursor:pointer;margin-top:10px}
+  button:hover{filter:brightness(1.06)}
+  .exit-game{position:fixed;right:18px;bottom:18px;z-index:20;background:var(--panel);color:var(--ink);
+    border:1px solid rgba(94,197,255,.45);backdrop-filter:blur(6px);font-size:13px;padding:10px 14px}
+  .result-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+  .result-actions button{margin-top:0}
+  #finish{background:var(--good);color:#07180f}
+  .hint{font-size:13px;opacity:.75}
+  .spinner{width:38px;height:38px;border:4px solid rgba(94,197,255,.25);border-top-color:var(--accent);
+    border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="game"></canvas>
+  <button class="exit-game" id="exitGame" type="button">Exit Game</button>
+
+  <div class="hud">
+    <div class="badge kicks">Kicks <b><span id="kicks">0</span></b></div>
+    <div class="badge">Best <b><span id="best">0</span></b></div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="card" id="card">
+      <div class="spinner"></div>
+      <p class="kick-label" style="margin-top:16px">Jegichagi · 제기차기 🇰🇷</p>
+      <p>Loading pose tracking & camera…</p>
+      <p class="hint">Allow the camera prompt. Open over <b>http://localhost</b> (not file://).</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ------------------------------------------------------------------ *
+ *  TUNING
+ * ------------------------------------------------------------------ */
+const CONFIG = {
+  GRAVITY:        1350,   // px/s^2
+  KICK_SPEED:      900,   // base upward speed on a kick
+  KICK_BONUS:      0.45,  // extra from how fast your foot is moving up
+  KICK_BONUS_MAX:  520,   // cap on that bonus
+  KICK_RADIUS:      60,   // hit zone around the instep only (not the whole leg)
+  KICK_COOLDOWN:   240,   // ms before the same jegi can be kicked again
+  CENTER_PULL:     1.3,   // how strongly each kick steers the jegi back toward center
+  MAX_VX:          260,   // cap horizontal speed
+  WALL_BOUNCE:     0.65,
+  JEGI_R:           20,
+  DROP_LINE:       0.94,  // jegi below this fraction of height = dropped
+  FOOT_VIS:        0.3,   // ankle visibility needed to count a foot (lowered for pants/low light)
+  TOE_VIS:         0.35,  // toe visibility needed to bias the instep toward the toe
+  PRESENCE_GRACE:  800,   // ms a foot stays "present" after last seen (survives flicker)
+  COUNTDOWN_MS:    3000,
+};
+
+/* ------------------------------------------------------------------ *
+ *  Elements & state
+ * ------------------------------------------------------------------ */
+const video   = document.getElementById("cam");
+const canvas  = document.getElementById("game");
+const ctx     = canvas.getContext("2d");
+const overlay = document.getElementById("overlay");
+const card    = document.getElementById("card");
+const elKicks = document.getElementById("kicks");
+const elBest  = document.getElementById("best");
+
+let W=0,H=0;
+function resize(){ W=canvas.width=innerWidth; H=canvas.height=innerHeight; }
+addEventListener("resize", resize); resize();
+
+let poseLandmarker=null;
+let STATE="loading";            // loading | waiting | countdown | playing | over
+let lastTime=performance.now();
+
+let jegi=null;                  // {x,y,vx,vy,lastKick}
+let kicks=0;
+let best=Number(localStorage.getItem("jegichagi_best")||0);
+elBest.textContent=String(best);
+let countdownStart=0;
+let lastFeetSeen=0;             // timestamp of last frame with a visible foot (presence grace)
+
+// foot tracking (velocity)
+let prevFeet={left:null,right:null};   // each {x,y,t}
+
+const POSE_LEGS=[
+  [11,12],[11,23],[12,24],[23,24],
+  [23,25],[25,27],[27,29],[29,31],[27,31],
+  [24,26],[26,28],[28,30],[30,32],[28,32]
+];
+
+/* ------------------------------------------------------------------ *
+ *  Audio
+ * ------------------------------------------------------------------ */
+let actx=null;
+function beep(freq,dur=0.08,type="sine",gain=0.15){
+  try{
+    actx=actx||new (window.AudioContext||window.webkitAudioContext)();
+    const o=actx.createOscillator(),g=actx.createGain();
+    o.type=type;o.frequency.value=freq;o.connect(g);g.connect(actx.destination);
+    g.gain.setValueAtTime(gain,actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001,actx.currentTime+dur);
+    o.start();o.stop(actx.currentTime+dur);
+  }catch(e){}
+}
+
+function sendToWrapper(type){
+  if(window.parent && window.parent !== window){
+    window.parent.postMessage({ type }, "*");
+  }else{
+    const country = new URLSearchParams(window.location.search).get("from") || "southKorea";
+    window.location.href = type === "gat:finish-game"
+      ? `../games-across-time-draft/index.html?complete=${encodeURIComponent(country)}`
+      : "../games-across-time-draft/index.html#worldmap";
+  }
+}
+
+document.getElementById("exitGame").addEventListener("click", () => sendToWrapper("gat:exit-game"));
+
+/* ------------------------------------------------------------------ *
+ *  Setup
+ * ------------------------------------------------------------------ */
+async function init(){
+  try{
+    const fileset=await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    poseLandmarker=await PoseLandmarker.createFromOptions(fileset,{
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO",
+      numPoses:1,
+      minPoseDetectionConfidence:0.3,
+      minPosePresenceConfidence:0.3,
+      minTrackingConfidence:0.3
+    });
+    const stream=await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:"user"},audio:false});
+    video.srcObject=stream; await video.play();
+    goWaiting();
+    requestAnimationFrame(loop);
+  }catch(err){ showError(err); }
+}
+
+function showError(err){
+  STATE="error"; overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">Jegichagi</p>
+    <h1 style="color:var(--bad)">Can't start</h1>
+    <p>${(err&&err.message)?err.message:err}</p>
+    <p class="hint">Serve over <b>http://localhost</b> (run <code>python3 -m http.server</code>)
+    and allow the camera.</p>`;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Flow
+ * ------------------------------------------------------------------ */
+function goWaiting(){
+  STATE="waiting"; jegi=null; kicks=0; elKicks.textContent="0";
+  overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">Jegichagi · 제기차기 🇰🇷 · solo high score</p>
+    <h1>Keep the jegi in the air! 🏸</h1>
+    <p>An old Korean street game: kick the paper shuttlecock with the
+       <b>inside of your foot</b> and don't let it touch the ground.</p>
+    <p><b>Step back</b> until your legs are in the camera, then we'll count you in.</p>
+    <p class="hint">Every kick scores. It ends when the jegi drops.</p>`;
+}
+
+function goCountdown(){ STATE="countdown"; countdownStart=performance.now(); overlay.style.display="none"; }
+
+function startPlay(){
+  STATE="playing";
+  jegi={ x:W/2, y:H*0.18, vx:(rand()-0.5)*60, vy:0, lastKick:0 };
+  kicks=0; elKicks.textContent="0";
+  beep(680,0.09,"triangle",0.18);
+}
+
+function gameOver(){
+  STATE="over";
+  const record = kicks>best;
+  if(record){ best=kicks; localStorage.setItem("jegichagi_best",String(best)); elBest.textContent=String(best); }
+  beep(180,0.25,"sawtooth",0.2);
+  overlay.style.display="flex";
+  card.innerHTML=`
+    <p class="kick-label">Run over</p>
+    <div class="big">${kicks} kick${kicks===1?'':'s'}</div>
+    ${record?'<p class="win">🎉 New best!</p>':`<p>Best: <b>${best}</b></p>`}
+    <div class="result-actions">
+      <button id="again">Play again</button>
+      <button id="finish">Finish Game</button>
+    </div>
+    <p class="hint">Step back into frame to count in again.</p>`;
+  document.getElementById("again").onclick=goWaiting;
+  document.getElementById("finish").onclick=()=>sendToWrapper("gat:finish-game");
+}
+
+function rand(){ return Math.random(); }
+
+/* ------------------------------------------------------------------ *
+ *  Pose processing → foot points with velocity
+ * ------------------------------------------------------------------ */
+function processPose(now){
+  let feet=[], skeleton=null;
+  if(!poseLandmarker || video.readyState<2) return {feet,skeleton};
+
+  let res;
+  try{ res=poseLandmarker.detectForVideo(video,now); }catch(e){ return {feet,skeleton}; }
+  if(!res || !res.landmarks || !res.landmarks.length) { prevFeet={left:null,right:null}; return {feet,skeleton}; }
+
+  const lm=res.landmarks[0];
+  const P=i=>({ x:(1-lm[i].x)*W, y:lm[i].y*H, v:(lm[i].visibility??1) });
+  skeleton=lm.map((_,i)=>P(i));
+
+  const sides=[
+    {name:"left",  ankle:27, toe:31},
+    {name:"right", ankle:28, toe:32},
+  ];
+  for(const s of sides){
+    const a=P(s.ankle), t=P(s.toe);
+    if(a.v < CONFIG.FOOT_VIS) { prevFeet[s.name]=null; continue; }
+    // instep point: bias toward the toe (top of foot) when the toe is visible,
+    // otherwise fall back to the ankle nudged slightly down toward the foot.
+    let fx, fy;
+    if(t.v >= CONFIG.TOE_VIS){
+      fx = a.x*0.35 + t.x*0.65;
+      fy = a.y*0.35 + t.y*0.65;
+    } else {
+      fx = a.x;
+      fy = a.y + H*0.02;
+    }
+    let vy=0,vx=0;
+    const pv=prevFeet[s.name];
+    if(pv){ const dt=Math.max((now-pv.t)/1000,0.001); vy=(fy-pv.y)/dt; vx=(fx-pv.x)/dt; }
+    prevFeet[s.name]={x:fx,y:fy,t:now};
+    feet.push({x:fx,y:fy,vx,vy,name:s.name});
+  }
+  return {feet,skeleton};
+}
+
+/* ------------------------------------------------------------------ *
+ *  Loop
+ * ------------------------------------------------------------------ */
+function loop(){
+  const now=performance.now();
+  let dt=(now-lastTime)/1000; lastTime=now;
+  if(dt>0.05) dt=0.05;
+
+  const {feet,skeleton}=processPose(now);
+
+  // presence with grace so brief tracking dropouts don't reset the count-in
+  if(feet.length>0) lastFeetSeen=now;
+  const feetPresent = (now-lastFeetSeen) < CONFIG.PRESENCE_GRACE;
+
+  if(STATE==="waiting" && feetPresent){ goCountdown(); }
+  if(STATE==="countdown"){
+    if(!feetPresent){ goWaiting(); }
+    else if(now-countdownStart>=CONFIG.COUNTDOWN_MS){ startPlay(); }
+  }
+  if(STATE==="playing"){ updatePlay(dt,feet,now); }
+
+  render(feet,skeleton,now);
+  requestAnimationFrame(loop);
+}
+
+function updatePlay(dt,feet,now){
+  jegi.vy += CONFIG.GRAVITY*dt;
+  jegi.x  += jegi.vx*dt;
+  jegi.y  += jegi.vy*dt;
+
+  // walls
+  if(jegi.x<CONFIG.JEGI_R){ jegi.x=CONFIG.JEGI_R; jegi.vx=Math.abs(jegi.vx)*CONFIG.WALL_BOUNCE; }
+  if(jegi.x>W-CONFIG.JEGI_R){ jegi.x=W-CONFIG.JEGI_R; jegi.vx=-Math.abs(jegi.vx)*CONFIG.WALL_BOUNCE; }
+
+  // kick: any foot near the jegi while it's not shooting upward
+  if(now-jegi.lastKick > CONFIG.KICK_COOLDOWN && jegi.vy > -60){
+    for(const f of feet){
+      if(Math.hypot(f.x-jegi.x, f.y-jegi.y) < CONFIG.KICK_RADIUS){
+        const bonus=Math.min(Math.max(-f.vy,0)*CONFIG.KICK_BONUS, CONFIG.KICK_BONUS_MAX);
+        jegi.vy = -(CONFIG.KICK_SPEED + bonus);
+        // steer back toward center so it stays reachable, plus a little foot english
+        jegi.vx = Math.max(-CONFIG.MAX_VX, Math.min(CONFIG.MAX_VX,
+                    (W/2 - jegi.x)*CONFIG.CENTER_PULL*0.01*60 + f.vx*0.15));
+        jegi.lastKick=now;
+        kicks++; elKicks.textContent=String(kicks);
+        beep(520+Math.min(kicks,20)*28,0.06,"triangle",0.16);
+        break;
+      }
+    }
+  }
+
+  // dropped
+  if(jegi.y - CONFIG.JEGI_R > H*CONFIG.DROP_LINE){ gameOver(); }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Rendering
+ * ------------------------------------------------------------------ */
+function drawSkeleton(sk){
+  if(!sk) return;
+  ctx.strokeStyle="rgba(94,197,255,.5)"; ctx.lineWidth=3;
+  for(const [a,b] of POSE_LEGS){
+    if(sk[a].v<0.35||sk[b].v<0.35) continue;
+    ctx.beginPath(); ctx.moveTo(sk[a].x,sk[a].y); ctx.lineTo(sk[b].x,sk[b].y); ctx.stroke();
+  }
+}
+
+function drawFoot(f){
+  // filled instep target so the player sees exactly where the kick zone is
+  ctx.beginPath(); ctx.arc(f.x,f.y,CONFIG.KICK_RADIUS,0,Math.PI*2);
+  ctx.fillStyle="rgba(94,197,255,.14)"; ctx.fill();
+  ctx.strokeStyle="rgba(94,197,255,.7)"; ctx.lineWidth=2;
+  ctx.setLineDash([6,6]); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(f.x,f.y,6,0,Math.PI*2);
+  ctx.fillStyle="rgba(238,242,246,.95)"; ctx.fill();
+}
+
+function drawJegi(x,y){
+  // paper streamers on top
+  const colors=["#ff6b6b","#ffd166","#5ec5ff","#57d38c"];
+  ctx.save(); ctx.translate(x,y);
+  for(let i=0;i<colors.length;i++){
+    const a=-Math.PI/2 + (i-(colors.length-1)/2)*0.32;
+    ctx.strokeStyle=colors[i]; ctx.lineWidth=4; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(0,-2);
+    ctx.lineTo(Math.cos(a)*CONFIG.JEGI_R*1.9, Math.sin(a)*CONFIG.JEGI_R*1.9); ctx.stroke();
+  }
+  // weighted base (coin wrapped in paper)
+  const g=ctx.createRadialGradient(-4,-4,3,0,0,CONFIG.JEGI_R);
+  g.addColorStop(0,"#fff3d6"); g.addColorStop(1,"#c8901f");
+  ctx.beginPath(); ctx.arc(0,0,CONFIG.JEGI_R,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+  ctx.lineWidth=2; ctx.strokeStyle="rgba(0,0,0,.35)"; ctx.stroke();
+  ctx.restore();
+}
+
+function render(feet,skeleton,now){
+  ctx.clearRect(0,0,W,H);
+
+  // floor line
+  const fy=H*CONFIG.DROP_LINE;
+  ctx.strokeStyle="rgba(255,107,107,.5)"; ctx.lineWidth=2; ctx.setLineDash([14,10]);
+  ctx.beginPath(); ctx.moveTo(0,fy); ctx.lineTo(W,fy); ctx.stroke(); ctx.setLineDash([]);
+
+  drawSkeleton(skeleton);
+  for(const f of feet) drawFoot(f);
+
+  if(STATE==="playing" && jegi) drawJegi(jegi.x,jegi.y);
+
+  // countdown number
+  if(STATE==="countdown"){
+    const left=Math.ceil((CONFIG.COUNTDOWN_MS-(now-countdownStart))/1000);
+    ctx.fillStyle="rgba(255,255,255,.92)"; ctx.textAlign="center";
+    ctx.font="800 120px Inter, sans-serif";
+    ctx.fillText(String(left), W/2, H*0.42);
+    ctx.font="600 24px Inter, sans-serif";
+    ctx.fillText("get ready…", W/2, H*0.52);
+  }
+
+  // waiting hint when no feet
+  if(STATE==="waiting" && feet.length===0){
+    // overlay card already shows instructions
+  }
+}
+
+init();
+</script>
+</body>
+</html>

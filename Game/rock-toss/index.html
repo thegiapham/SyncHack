@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Jacks — Fivestones</title>
+<style>
+  :root{
+    --bg:#0e0b08; --ink:#f4ead6; --gold:#e9b949; --good:#57d38c; --bad:#ff6b6b;
+    --panel:rgba(20,15,10,.72);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0}
+  /* Video is mirrored via CSS; canvas draws in already-mirrored world coords. */
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+  #game{position:absolute;inset:0;width:100%;height:100%}
+  .hud{position:absolute;top:18px;left:18px;right:18px;display:flex;justify-content:space-between;
+    align-items:flex-start;pointer-events:none;gap:12px}
+  .badge{background:var(--panel);border:1px solid rgba(233,185,73,.35);backdrop-filter:blur(6px);
+    padding:10px 14px;border-radius:14px;font-weight:600;font-size:15px;letter-spacing:.2px}
+  .badge b{color:var(--gold)}
+  .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;text-align:center;gap:16px;pointer-events:none;padding:24px}
+  .card{background:var(--panel);border:1px solid rgba(233,185,73,.35);backdrop-filter:blur(8px);
+    padding:28px 34px;border-radius:22px;max-width:520px;pointer-events:auto}
+  h1{font-size:30px;margin:0 0 6px}
+  .kick{letter-spacing:3px;font-size:12px;color:var(--gold);text-transform:uppercase;margin:0 0 14px}
+  p{margin:8px 0;opacity:.9;line-height:1.5;font-size:15px}
+  .big{font-size:44px;font-weight:800;margin:2px 0}
+  .win{color:var(--good)} .lose{color:var(--bad)}
+  button{font:inherit;font-weight:700;color:#20180e;background:var(--gold);border:0;
+    padding:12px 22px;border-radius:999px;cursor:pointer;margin-top:10px}
+  button:hover{filter:brightness(1.06)}
+  .exit-game{position:fixed;right:18px;bottom:18px;z-index:20;background:var(--panel);color:var(--ink);
+    border:1px solid rgba(233,185,73,.45);backdrop-filter:blur(6px);font-size:13px;padding:10px 14px}
+  .result-actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+  .result-actions button{margin-top:0}
+  #finish{background:var(--good);color:#07180f}
+  .hint{font-size:13px;opacity:.75}
+  .spinner{width:38px;height:38px;border:4px solid rgba(233,185,73,.25);border-top-color:var(--gold);
+    border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline muted></video>
+  <canvas id="game"></canvas>
+  <button class="exit-game" id="exitGame" type="button">Exit Game</button>
+
+  <div class="hud">
+    <div class="badge">Jacks picked up <b><span id="grabbed">0</span>/<span id="jackTotal">4</span></b></div>
+    <div class="badge">Ball <b><span id="caught">not caught</span></b></div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="card" id="card">
+      <div class="spinner"></div>
+      <p class="kick" style="margin-top:16px">Jacks · Fivestones 🇬🇧</p>
+      <p>Loading hand tracking & camera…</p>
+      <p class="hint">Allow the camera prompt. Must be opened over <b>http://localhost</b> (not a file://).</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+/* ------------------------------------------------------------------ *
+ *  TUNING — tweak these to change feel/difficulty
+ * ------------------------------------------------------------------ */
+const CONFIG = {
+  NUM_THROWN:        1,      // Jacks: one ball tossed up
+  NUM_GROUND:        4,      // jacks scattered on the ground
+  GRAVITY:           1350,   // px/s^2 downward (a touch lower = longer hang to grab jacks)
+  THROW_THRESHOLD:   950,    // upward palm speed (px/s) that triggers a launch (higher = needs a stronger flick)
+  LAUNCH_MIN:        1150,   // min upward launch speed
+  LAUNCH_MAX:        1650,   // max upward launch speed
+  LAUNCH_SCALE:      1.15,   // how much your throw speed scales the launch
+  SPREAD_X:          0,      // one ball goes straight up, no spread
+  CATCH_RADIUS:      95,     // forgiving: falling ball within this of a palm = caught
+  GRAB_RADIUS:       74,     // palm within this of a jack = picked up
+  GRAB_ARM_MS:       650,    // delay after launch before jacks can be grabbed (lets your throwing hand clear them)
+  ROCK_R:            24,     // piece radius (px)
+  SCATTER_W:         0.5,    // jack scatter width as a fraction of screen
+  CATCH_ARM_APEX:    true,   // only catchable after it starts falling
+};
+
+/* ------------------------------------------------------------------ *
+ *  Elements & state
+ * ------------------------------------------------------------------ */
+const video   = document.getElementById("cam");
+const canvas  = document.getElementById("game");
+const ctx     = canvas.getContext("2d");
+const overlay = document.getElementById("overlay");
+const card    = document.getElementById("card");
+const elCaught  = document.getElementById("caught");
+const elGrabbed = document.getElementById("grabbed");
+document.getElementById("jackTotal").textContent = String(CONFIG.NUM_GROUND);
+
+let W = 0, H = 0;
+function resize(){
+  W = canvas.width  = Math.floor(window.innerWidth);
+  H = canvas.height = Math.floor(window.innerHeight);
+}
+window.addEventListener("resize", resize);
+resize();
+
+let handLandmarker = null;
+let STATE = "loading";        // loading | idle | airborne | result
+let lastTime = performance.now();
+
+let thrown = [];              // {x,y,vx,vy,caught,missed,falling}
+let ground = [];             // {x,y,grabbed}
+let caughtCount = 0, grabbedCount = 0;
+let resultWin = false;
+let roundStartT = 0;          // when the current throw launched (for grab-arm delay)
+
+// primary-hand palm velocity tracking (the throwing hand)
+let prevPalm = null;          // {x,y,t}
+let palmVy = 0;
+
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+
+/* ------------------------------------------------------------------ *
+ *  Audio (tiny WebAudio blips)
+ * ------------------------------------------------------------------ */
+let actx = null;
+function beep(freq, dur=0.08, type="sine", gain=0.15){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.value = freq;
+    o.connect(g); g.connect(actx.destination);
+    g.gain.setValueAtTime(gain, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime+dur);
+    o.start(); o.stop(actx.currentTime+dur);
+  }catch(e){}
+}
+
+function sendToWrapper(type){
+  if(window.parent && window.parent !== window){
+    window.parent.postMessage({ type }, "*");
+  }else{
+    const country = new URLSearchParams(window.location.search).get("from") || "unitedKingdom";
+    window.location.href = type === "gat:finish-game"
+      ? `../games-across-time-draft/index.html?complete=${encodeURIComponent(country)}`
+      : "../games-across-time-draft/index.html#worldmap";
+  }
+}
+
+document.getElementById("exitGame").addEventListener("click", () => sendToWrapper("gat:exit-game"));
+
+/* ------------------------------------------------------------------ *
+ *  Setup
+ * ------------------------------------------------------------------ */
+async function init(){
+  try{
+    const fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(fileset, {
+      baseOptions:{
+        modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+        delegate:"GPU"
+      },
+      runningMode:"VIDEO",
+      numHands:2
+    });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{ width:{ideal:1280}, height:{ideal:720}, facingMode:"user" }, audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    goIdle();
+    requestAnimationFrame(loop);
+  }catch(err){
+    showError(err);
+  }
+}
+
+function showError(err){
+  STATE = "error";
+  overlay.style.display = "flex";
+  card.innerHTML = `
+    <p class="kick">Rock Toss</p>
+    <h1 style="color:var(--bad)">Can't start</h1>
+    <p>${(err && err.message) ? err.message : err}</p>
+    <p class="hint">Most common fix: serve over <b>http://localhost</b>
+    (run <code>python3 -m http.server</code> in this folder), and allow the camera.</p>`;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Round flow
+ * ------------------------------------------------------------------ */
+function goIdle(){
+  STATE = "idle";
+  thrown = []; ground = [];
+  caughtCount = 0; grabbedCount = 0;
+  elCaught.textContent = "not caught"; elGrabbed.textContent = "0";
+  overlay.style.display = "flex";
+  card.innerHTML = `
+    <p class="kick">Jacks · Fivestones 🇬🇧 · one turn to win</p>
+    <h1>Toss the ball up! ⚽</h1>
+    <p>Hold your hand up — the ball rests on your palm.
+       Flick your hand <b>up fast</b> to toss it.</p>
+    <p>While it's in the air: <b>scoop up all ${CONFIG.NUM_GROUND} jacks</b> from the ground,
+       then <b>catch the ball</b> before it lands.</p>
+    <p class="hint">Grab all ${CONFIG.NUM_GROUND} jacks AND catch the ball to win.</p>`;
+}
+
+function launch(strength){
+  STATE = "airborne";
+  roundStartT = performance.now();
+  overlay.style.display = "none";
+  beep(660, 0.09, "triangle", 0.18);
+
+  const speed = Math.max(CONFIG.LAUNCH_MIN,
+                Math.min(CONFIG.LAUNCH_MAX, strength * CONFIG.LAUNCH_SCALE));
+  const px = prevPalm ? prevPalm.x : W/2;
+  const py = prevPalm ? prevPalm.y : H*0.6;
+
+  // one ball straight up (slight variance so it's not perfectly vertical)
+  thrown = [];
+  for(let i=0;i<CONFIG.NUM_THROWN;i++){
+    thrown.push({
+      x: px,
+      y: py,
+      vx: (rand()-0.5)*70,
+      vy: -speed,
+      caught:false, missed:false, falling:false
+    });
+  }
+
+  // jacks: scattered across a band in the lower-middle of the frame
+  ground = [];
+  const spanX = W * CONFIG.SCATTER_W;
+  const startX = W/2 - spanX/2;
+  for(let i=0;i<CONFIG.NUM_GROUND;i++){
+    const gx = startX + rand()*spanX;
+    const gy = H*0.60 + rand()*H*0.24;   // lower-middle band
+    ground.push({ x:gx, y:gy, grabbed:false });
+  }
+}
+
+// Fisher–Yates shuffle (Math.random is fine for gameplay variety)
+function shuffle(a){
+  a = a.slice();
+  for(let i=a.length-1;i>0;i--){ const j=Math.floor(rand()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
+  return a;
+}
+
+function finishRound(){
+  STATE = "result";
+  const ballCaught = caughtCount >= CONFIG.NUM_THROWN;
+  const allJacks   = grabbedCount >= CONFIG.NUM_GROUND;
+  resultWin = ballCaught && allJacks;
+  beep(resultWin?880:180, 0.25, resultWin?"triangle":"sawtooth", 0.2);
+  overlay.style.display = "flex";
+  const reason = resultWin ? '' :
+    !ballCaught ? '<p class="hint">You dropped the ball.</p>'
+                : `<p class="hint">You only scooped ${grabbedCount} of ${CONFIG.NUM_GROUND} jacks in time.</p>`;
+  card.innerHTML = `
+    <p class="kick">Result</p>
+    <div class="big ${resultWin?'win':'lose'}">${resultWin?'YOU WIN! 🎉':'MISSED IT'}</div>
+    <p>Jacks <b>${grabbedCount}/${CONFIG.NUM_GROUND}</b> · ball ${ballCaught?'<b>caught</b>':'<b>dropped</b>'}</p>
+    ${reason}
+    <div class="result-actions">
+      <button id="again">Play again</button>
+      <button id="finish">Finish Game</button>
+    </div>
+    <p class="hint">${resultWin ? 'Nice catch.' : 'You can still finish and return to the archive.'}</p>`;
+  document.getElementById("again").onclick = goIdle;
+  document.getElementById("finish").onclick = () => sendToWrapper("gat:finish-game");
+}
+
+/* deterministic-ish rng that varies frame to frame (Math.random is fine here) */
+function rand(){ return Math.random(); }
+
+/* ------------------------------------------------------------------ *
+ *  Per-frame hand processing
+ * ------------------------------------------------------------------ */
+function processHands(now){
+  const palms = [];
+  if(!handLandmarker || video.readyState < 2) return palms;
+
+  let res;
+  try{ res = handLandmarker.detectForVideo(video, now); }
+  catch(e){ return palms; }
+
+  if(res && res.landmarks){
+    for(const lm of res.landmarks){
+      // Mirror x to match the CSS-mirrored video: gx = (1-x)*W
+      const toPx = p => ({ x:(1-p.x)*W, y:p.y*H });
+      const pts = lm.map(toPx);
+      // palm center = centroid of wrist + finger MCPs (0,5,9,13,17)
+      const idx=[0,5,9,13,17];
+      let cx=0, cy=0;
+      for(const i of idx){ cx+=pts[i].x; cy+=pts[i].y; }
+      cx/=idx.length; cy/=idx.length;
+
+      const scale = Math.hypot(pts[0].x-pts[9].x, pts[0].y-pts[9].y) || 1;
+      // openness: avg fingertip distance to palm center vs hand scale
+      const tips=[8,12,16,20];
+      let open=0;
+      for(const i of tips) open += Math.hypot(pts[i].x-cx, pts[i].y-cy);
+      open = (open/tips.length) / scale;   // ~>1.4 open, <1.0 fist
+
+      palms.push({ x:cx, y:cy, pts, open, scale });
+    }
+  }
+  return palms;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Main loop
+ * ------------------------------------------------------------------ */
+function loop(){
+  const now = performance.now();
+  let dt = (now - lastTime)/1000;
+  lastTime = now;
+  if(dt > 0.05) dt = 0.05;   // clamp big frame gaps
+
+  const palms = processHands(now);
+
+  // primary hand = first detected → drives throw + holds the rocks
+  const primary = palms[0] || null;
+  if(primary){
+    if(prevPalm){
+      const vy = (primary.y - prevPalm.y) / Math.max(dt, 0.001);
+      palmVy = palmVy*0.5 + vy*0.5; // light smoothing
+    }
+    prevPalm = { x:primary.x, y:primary.y, t:now };
+  } else {
+    prevPalm = null; palmVy = 0;
+  }
+
+  // throw detection
+  if(STATE==="idle" && primary && palmVy < -CONFIG.THROW_THRESHOLD){
+    launch(Math.abs(palmVy));
+  }
+
+  // physics + interactions
+  if(STATE==="airborne"){
+    updateAirborne(dt, palms);
+  }
+
+  render(palms);
+  requestAnimationFrame(loop);
+}
+
+function updateAirborne(dt, palms){
+  // jacks — pick up each one your palm sweeps over (armed after a short delay
+  // so the throwing hand clears the area first)
+  const armed = performance.now() - roundStartT > CONFIG.GRAB_ARM_MS;
+  if(armed){
+    for(const g of ground){
+      if(g.grabbed) continue;
+      for(const p of palms){
+        if(Math.hypot(p.x-g.x, p.y-g.y) < CONFIG.GRAB_RADIUS){
+          g.grabbed = true; grabbedCount++;
+          elGrabbed.textContent = String(grabbedCount);
+          beep(520+grabbedCount*70, 0.06, "square", 0.13);
+          break;
+        }
+      }
+    }
+  }
+
+  // ball — integrate + catch/miss
+  for(const r of thrown){
+    if(r.caught || r.missed) continue;
+    r.vy += CONFIG.GRAVITY * dt;
+    r.x  += r.vx * dt;
+    r.y  += r.vy * dt;
+    if(r.vy > 0) r.falling = true;
+
+    // walls: gentle bounce so it doesn't fly off-screen
+    if(r.x < CONFIG.ROCK_R){ r.x = CONFIG.ROCK_R; r.vx = Math.abs(r.vx)*0.6; }
+    if(r.x > W-CONFIG.ROCK_R){ r.x = W-CONFIG.ROCK_R; r.vx = -Math.abs(r.vx)*0.6; }
+
+    const catchable = !CONFIG.CATCH_ARM_APEX || r.falling;
+    if(catchable){
+      for(const p of palms){
+        if(Math.hypot(p.x-r.x, p.y-r.y) < CONFIG.CATCH_RADIUS){
+          r.caught = true; caughtCount++;
+          elCaught.textContent = "caught!";
+          beep(880, 0.12, "triangle", 0.2);
+          break;
+        }
+      }
+    }
+    if(!r.caught && r.y - CONFIG.ROCK_R > H){
+      r.missed = true;
+      beep(160, 0.12, "sawtooth", 0.14);
+    }
+  }
+
+  const resolved = thrown.every(r => r.caught || r.missed);
+  if(resolved && thrown.length) finishRound();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Rendering
+ * ------------------------------------------------------------------ */
+function drawRock(x,y,r,hue){
+  const g = ctx.createRadialGradient(x-r*0.35, y-r*0.4, r*0.2, x, y, r);
+  g.addColorStop(0, hue.light);
+  g.addColorStop(1, hue.dark);
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = "rgba(0,0,0,.35)"; ctx.stroke();
+}
+const ROCK_GREY = {light:"#c9bfa9", dark:"#6b6152"};
+const ROCK_GOLD = {light:"#ffe39a", dark:"#c8901f"};
+const BALL_RED  = {light:"#ff9a8b", dark:"#c0392b"};
+
+// a six-pointed metal jack (like the real toy)
+function drawJack(x,y,r){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.strokeStyle = "#e6ecf2"; ctx.lineWidth = r*0.34; ctx.lineCap = "round";
+  for(let k=0;k<3;k++){
+    const a = k*Math.PI/3;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*r, Math.sin(a)*r);
+    ctx.lineTo(-Math.cos(a)*r, -Math.sin(a)*r);
+    ctx.stroke();
+  }
+  // little knobs on the tips
+  ctx.fillStyle = "#aeb7c2";
+  for(let k=0;k<6;k++){
+    const a = k*Math.PI/3;
+    ctx.beginPath(); ctx.arc(Math.cos(a)*r, Math.sin(a)*r, r*0.22, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawHand(p){
+  // skeleton
+  ctx.lineWidth = 3; ctx.strokeStyle = "rgba(233,185,73,.55)";
+  for(const [a,b] of HAND_CONNECTIONS){
+    ctx.beginPath(); ctx.moveTo(p.pts[a].x,p.pts[a].y);
+    ctx.lineTo(p.pts[b].x,p.pts[b].y); ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(244,234,214,.9)";
+  for(const pt of p.pts){ ctx.beginPath(); ctx.arc(pt.x,pt.y,3.5,0,Math.PI*2); ctx.fill(); }
+  // catch zone at palm
+  const open = p.open > 1.1;
+  ctx.beginPath(); ctx.arc(p.x,p.y,CONFIG.CATCH_RADIUS,0,Math.PI*2);
+  ctx.strokeStyle = open ? "rgba(87,211,140,.8)" : "rgba(233,185,73,.5)";
+  ctx.lineWidth = open ? 3 : 2;
+  ctx.setLineDash([8,8]); ctx.stroke(); ctx.setLineDash([]);
+}
+
+function render(palms){
+  ctx.clearRect(0,0,W,H);
+
+  // jacks on the ground (dimmed until grabbable, then solid — sweep your palm over them)
+  const armed = STATE==="airborne" && (performance.now() - roundStartT > CONFIG.GRAB_ARM_MS);
+  for(const g of ground){
+    if(g.grabbed) continue;
+    ctx.globalAlpha = armed ? 1 : 0.5;
+    drawJack(g.x, g.y, CONFIG.ROCK_R*0.95);
+    ctx.globalAlpha = 1;
+  }
+
+  // hands
+  for(const p of palms) drawHand(p);
+
+  // the ball — held above the palm, or in flight
+  if(STATE==="idle" && prevPalm){
+    drawRock(prevPalm.x, prevPalm.y - 46, CONFIG.ROCK_R, BALL_RED);
+  }
+  if(STATE==="airborne" || STATE==="result"){
+    for(const r of thrown){
+      if(r.caught) continue;
+      drawRock(r.x, r.y, CONFIG.ROCK_R, r.missed?ROCK_GREY:BALL_RED);
+    }
+  }
+
+  // idle hint if no hand
+  if(STATE==="idle" && palms.length===0){
+    ctx.fillStyle="rgba(244,234,214,.85)"; ctx.textAlign="center";
+    ctx.font="600 22px Inter, sans-serif";
+    ctx.fillText("✋ Raise your hand so the camera can see it", W/2, H*0.5);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

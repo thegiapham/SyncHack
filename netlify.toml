@@ -1,0 +1,10 @@
+[build]
+  publish = "Game"
+
+# Serve the Games Across Time landing page at the site root,
+# while keeping /agalmata/, /fukuwarai/, /jegichagi/ and /rock-toss/
+# reachable so the ../ links from games-across-time-draft resolve.
+[[redirects]]
+  from = "/"
+  to = "/games-across-time-draft/index.html"
+  status = 200

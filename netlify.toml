@@ -1,10 +1,11 @@
 [build]
   publish = "Game"
 
-# Serve the Games Across Time landing page at the site root,
-# while keeping /agalmata/, /fukuwarai/, /jegichagi/ and /rock-toss/
-# reachable so the ../ links from games-across-time-draft resolve.
+# Redirect (not rewrite) the site root to the landing page.
+# A 302 changes the browser's URL to /games-across-time-draft/, so the
+# page's relative asset paths (styles.css, script.js, assets/...) resolve
+# correctly. A 200 rewrite would keep the URL at "/" and break them all.
 [[redirects]]
   from = "/"
-  to = "/games-across-time-draft/index.html"
-  status = 200
+  to = "/games-across-time-draft/"
+  status = 302

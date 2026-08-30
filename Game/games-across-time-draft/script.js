@@ -53,7 +53,7 @@ const countries = {
     number: '005 / 034', country: 'Madagascar', seal: '✧', stamp: 'MG',
     game: 'Fanorona', alias: 'Fanoron-Tsivy · a capturing board game from the Merina highlands.',
     description: 'Fanorona is played on the intersections of a nine-by-five grid, where a single move can sweep an entire line of stones off the board. It has been recorded in Madagascar since at least the seventeenth century and was long associated with the Merina court.',
-    preview: 'assets/gh-card.png', title: 'Fanoron-Tsivy Board', type: 'Capturing board game', markerColor: '#7d6b2b', labelX: '24px', labelY: '14px',
+    preview: 'assets/madagascar.jpeg', title: 'Fanoron-Tsivy Board', type: 'Capturing board game', markerColor: '#7d6b2b', labelX: '24px', labelY: '14px',
     steps: [
       'Stones fill every intersection of a nine-by-five grid, leaving only the centre empty.',
       'Move a stone along a line to capture by approach, or away from one to capture by withdrawal.',
@@ -69,13 +69,6 @@ const atlasEntries = {
     description: 'Players kick a jegi upward again and again, trying to keep it from falling while building a high score through balance, timing and control.',
     preview: 'assets/vn-preview.png', title: 'Jegi Shuttlecock', type: 'Kicking dexterity game', markerColor: '#b84a2f', labelX: '-106px',
     steps: ['Launch the jegi with your foot.', 'Keep kicking it before it touches the ground.', 'Build the longest streak of controlled kicks.']
-  },
-  china: {
-    number: '006 / 034', country: 'China', seal: 'CN', stamp: 'CN',
-    game: 'Jianzi (毽子)', alias: 'A shuttlecock kicking game played without using the hands.',
-    description: 'Players keep a weighted shuttlecock in the air using their feet, knees and body without using their hands.',
-    preview: 'assets/jp-card.png', title: 'Jianzi Shuttlecock', type: 'Shuttlecock game', markerColor: '#d86f38', labelY: '17px',
-    steps: ['Serve the weighted shuttlecock into the air.', 'Keep it airborne using feet, knees and body control.', 'Continue the rally without using hands.']
   },
   india: {
     number: '007 / 034', country: 'India', seal: 'IN', stamp: 'IN',
@@ -356,10 +349,6 @@ const cultureNotes = {
     cultureSnapshot: "India's enormous cultural diversity can be seen in its languages, religions, festivals, clothing, music, dance and regional cuisines.",
     funFact: "🥭 India is the world's largest mango producer. Mango season doesn't mess around."
   },
-  china: {
-    cultureSnapshot: 'Chinese culture has thousands of years of history, with traditions surrounding family, festivals, calligraphy, food and philosophy varying greatly across regions.',
-    funFact: '🥠 Plot twist: the fortune cookie most people associate with Chinese restaurants became popular in America, not China.'
-  },
   southKorea: {
     cultureSnapshot: 'Korean culture combines long-standing traditions such as hanbok and holiday celebrations with globally influential modern music, film, beauty and food culture.',
     funFact: '🎂 In 2023, South Korea adopted the international age-counting system for most official purposes, making some people effectively a year or two younger on paper.'
@@ -407,7 +396,6 @@ const countryContinents = {
   kenya: 'Africa',
   southAfrica: 'Africa',
   india: 'Asia',
-  china: 'Asia',
   southKorea: 'Asia',
   vietnam: 'Asia',
   mongolia: 'Asia',
@@ -420,7 +408,6 @@ const countryCardImages = {
   brazil: 'assets/Flag_of_Brazil.webp',
   canada: 'assets/Flag_of_Canada.svg',
   chile: 'assets/chile.png',
-  china: 'assets/China.webp',
   egypt: 'assets/Flag_of_Egypt.webp',
   finland: 'assets/Flag_of_Finland.webp',
   ghana: 'assets/ghana.svg',
@@ -714,11 +701,11 @@ let selectedMode = 'solo';
 const completedCountries = new Set();
 const journeyStorageKey = 'gamesAcrossTimeJourney';
 const playerNameStorageKey = 'gamesAcrossTimePlayerName';
+const certificateShownKey = 'gat:certificateShown';
 let discoveryRecords = {};
 let playerName = '';
 let pendingCardCountry = null;
 let unlockTimer = null;
-const certificateCountries = ['mongolia', 'unitedKingdom', 'greece', 'japan', 'southKorea', 'madagascar'];
 let certificatePending = false;
 let certificateShown = false;
 const screenNavGroup = {
@@ -743,6 +730,13 @@ function discoveredKeys() {
   return visibleCountryKeys().filter(key => completedCountries.has(key));
 }
 
+function playableCountryKeys() {
+  return Object.keys(journey).filter(key => {
+    const hidden = typeof hiddenMapCountries !== 'undefined' && hiddenMapCountries.has(key);
+    return countries[key] && journey[key]?.hasFullGame && !hidden;
+  });
+}
+
 function saveJourneyProgress() {
   const payload = { completed: [...completedCountries], records: discoveryRecords };
   localStorage.setItem(journeyStorageKey, JSON.stringify(payload));
@@ -762,17 +756,24 @@ function loadJourneyProgress() {
   }
 }
 
-function resetJourneyProgress() {
+function clearJourneyProgress() {
   completedCountries.clear();
   discoveryRecords = {};
-  playerName = '';
   pendingCardCountry = null;
-  previewCountry = null;
-  selectedCountry = 'vietnam';
-  selectedMode = 'solo';
   certificatePending = false;
   certificateShown = false;
   localStorage.removeItem(journeyStorageKey);
+  localStorage.removeItem(progressKey);
+  sessionStorage.removeItem(progressKey);
+  localStorage.removeItem(certificateShownKey);
+}
+
+function resetJourneyProgress() {
+  clearJourneyProgress();
+  playerName = '';
+  previewCountry = null;
+  selectedCountry = 'vietnam';
+  selectedMode = 'solo';
   localStorage.removeItem(playerNameStorageKey);
   const input = q('#playerNameInput');
   if (input) input.value = '';
@@ -1039,7 +1040,7 @@ const sharedTranslations = {
     collectionEyebrow: 'THE CULTURAL ARCHIVE', collectionTitle: "Games you've discovered across the world.", discovered: 'DISCOVERED', undiscovered: 'UNDISCOVERED', exploreAction: 'Explore →', viewCollection: 'View My Collection', waitingDiscovery: 'Traditional game waiting to be discovered',
     summaryKicker: 'YOUR JOURNEY ACROSS TIME', summaryTitle: 'You explored:', summaryCountries: 'Countries', summaryGames: 'Traditional games', summaryContinents: 'Continents', yourDiscoveries: 'YOUR DISCOVERIES', summaryQuote: 'Every game tells a story. Thanks for travelling across time.', exploreMore: 'Explore More', startNewJourney: 'Start a New Journey',
     genericFunFact: '{game} shows how games carry memory across generations.',
-    certificateKicker: 'CONGRATULATIONS', certificateTitle: 'Congratulations, you have completed all of the culture games in the world.', continueExploring: 'Continue exploring', closeCertificate: 'Close certificate'
+    certificateKicker: 'CONGRATULATIONS', certificateTitle: 'Congratulations, you have completed all of the available culture games.', continueExploring: 'Continue exploring', closeCertificate: 'Close certificate'
   },
   ja: {
     sideHome: 'ホーム', sideMap: '地図', sideGames: 'ゲーム', sideCultures: '文化', sideCollection: 'マイコレクション', changeSettings: '終了', sidebarQuote: '「遊びは、私たちをつなぐ最も古い言葉です。」',
@@ -1069,7 +1070,7 @@ const sharedTranslations = {
     collectionEyebrow: '文化アーカイブ', collectionTitle: '世界で発見したゲーム。', discovered: '発見済み', undiscovered: '未発見', exploreAction: '探索 →', viewCollection: 'コレクションを見る', waitingDiscovery: '発見を待っている伝統ゲーム',
     summaryKicker: '時間をめぐるあなたの旅', summaryTitle: '探索したもの:', summaryCountries: '国', summaryGames: '伝統ゲーム', summaryContinents: '大陸', yourDiscoveries: '発見一覧', summaryQuote: 'すべてのゲームには物語があります。旅をありがとう。', exploreMore: 'もっと探索', startNewJourney: '新しい旅を始める',
     genericFunFact: '{game} は、遊びが世代を越えて記憶を運ぶことを示しています。',
-    certificateKicker: 'おめでとうございます', certificateTitle: 'おめでとうございます。世界の文化ゲームをすべて完了しました。', continueExploring: '探索を続ける', closeCertificate: '証明書を閉じる'
+    certificateKicker: 'おめでとうございます', certificateTitle: 'おめでとうございます。利用可能な文化ゲームをすべて完了しました。', continueExploring: '探索を続ける', closeCertificate: '証明書を閉じる'
   },
   vi: {
     sideHome: 'Trang chủ', sideMap: 'Bản đồ', sideGames: 'Trò chơi', sideCultures: 'Văn hóa', sideCollection: 'Bộ sưu tập của tôi', changeSettings: 'Thoát', sidebarQuote: '“Vui chơi là ngôn ngữ lâu đời nhất kết nối tất cả chúng ta.”',
@@ -1099,7 +1100,7 @@ const sharedTranslations = {
     collectionEyebrow: 'KHO LƯU TRỮ VĂN HÓA', collectionTitle: 'Những trò chơi bạn đã khám phá trên thế giới.', discovered: 'ĐÃ KHÁM PHÁ', undiscovered: 'CHƯA KHÁM PHÁ', exploreAction: 'Khám phá →', viewCollection: 'Xem bộ sưu tập của tôi', waitingDiscovery: 'Trò chơi truyền thống đang chờ được khám phá',
     summaryKicker: 'HÀNH TRÌNH QUA THỜI GIAN CỦA BẠN', summaryTitle: 'Bạn đã khám phá:', summaryCountries: 'Quốc gia', summaryGames: 'Trò chơi truyền thống', summaryContinents: 'Châu lục', yourDiscoveries: 'NHỮNG KHÁM PHÁ CỦA BẠN', summaryQuote: 'Mỗi trò chơi kể một câu chuyện. Cảm ơn bạn đã du hành qua thời gian.', exploreMore: 'Khám phá thêm', startNewJourney: 'Bắt đầu hành trình mới',
     genericFunFact: '{game} cho thấy trò chơi có thể lưu giữ ký ức qua nhiều thế hệ.',
-    certificateKicker: 'CHÚC MỪNG', certificateTitle: 'Chúc mừng, bạn đã hoàn thành tất cả trò chơi văn hóa trên thế giới.', continueExploring: 'Tiếp tục khám phá', closeCertificate: 'Đóng chứng nhận'
+    certificateKicker: 'CHÚC MỪNG', certificateTitle: 'Chúc mừng, bạn đã hoàn thành tất cả trò chơi văn hóa hiện có.', continueExploring: 'Tiếp tục khám phá', closeCertificate: 'Đóng chứng nhận'
   }
 };
 
@@ -1124,7 +1125,7 @@ sharedTranslations.zh = { ...sharedTranslations.vi,
   completeTitle:'你已体验 {country} 的 {game}。', takeaway:'你探索了来自 {country} 的 {game}。之后可扩展为可玩的小游戏。', videoCaption:'观看 {game} 的玩法', videoPlaying:'演示视频占位 · 请替换为 MP4', stepCount:'步骤 {current} / {total}', previousStep:'上一步', nextStep:'下一步',
   beforeTravel:'继续旅行之前...', collectCard:'收集你的卡片', correct:'正确', notQuite:'还不对', cardDiscovered:'已发现文化卡片', didYouKnow:'你知道吗？', collectionEyebrow:'文化档案', collectionTitle:'你在世界各地发现的游戏。', discovered:'已发现', undiscovered:'未发现', exploreAction:'探索 →', viewCollection:'查看我的收藏', waitingDiscovery:'等待被发现的传统游戏',
   summaryKicker:'你的时间之旅', summaryTitle:'你探索了:', summaryCountries:'国家', summaryGames:'传统游戏', summaryContinents:'大洲', yourDiscoveries:'你的发现', summaryQuote:'每个游戏都讲述一个故事。感谢你穿越时间旅行。', exploreMore:'继续探索', startNewJourney:'开始新旅程', genericFunFact:'{game} 展示了游戏如何跨越世代承载记忆。',
-  certificateKicker:'恭喜', certificateTitle:'恭喜，你已完成世界上所有文化游戏。', continueExploring:'继续探索', closeCertificate:'关闭证书'
+  certificateKicker:'恭喜', certificateTitle:'恭喜，你已完成所有可用的文化游戏。', continueExploring:'继续探索', closeCertificate:'关闭证书'
 };
 
 sharedTranslations.ko = { ...sharedTranslations.vi,
@@ -1148,7 +1149,7 @@ sharedTranslations.ko = { ...sharedTranslations.vi,
   completeTitle:'{country}의 {game}을 체험했습니다.', takeaway:'{country}의 {game}을 탐험했습니다. 이 항목은 나중에 미니게임으로 확장할 수 있습니다.', videoCaption:'{game} 플레이 보기', videoPlaying:'데모 영상 자리표시자 · MP4로 교체', stepCount:'단계 {current} / {total}', previousStep:'이전 단계', nextStep:'다음 단계',
   beforeTravel:'다음 여행을 떠나기 전에...', collectCard:'카드 수집', correct:'정답', notQuite:'아직 아니에요', cardDiscovered:'문화 카드 발견', didYouKnow:'알고 있었나요?', collectionEyebrow:'문화 아카이브', collectionTitle:'세계에서 발견한 게임들.', discovered:'발견됨', undiscovered:'미발견', exploreAction:'탐험 →', viewCollection:'내 컬렉션 보기', waitingDiscovery:'발견을 기다리는 전통 게임',
   summaryKicker:'시간을 건너는 나의 여정', summaryTitle:'탐험한 것:', summaryCountries:'국가', summaryGames:'전통 게임', summaryContinents:'대륙', yourDiscoveries:'나의 발견', summaryQuote:'모든 게임에는 이야기가 있습니다. 시간 여행에 함께해 주셔서 감사합니다.', exploreMore:'더 탐험하기', startNewJourney:'새 여정 시작', genericFunFact:'{game}은 놀이가 세대를 넘어 기억을 전하는 방식을 보여 줍니다.',
-  certificateKicker:'축하합니다', certificateTitle:'축하합니다. 세계의 모든 문화 게임을 완료했습니다.', continueExploring:'계속 탐험하기', closeCertificate:'인증서 닫기'
+  certificateKicker:'축하합니다', certificateTitle:'축하합니다. 이용 가능한 모든 문화 게임을 완료했습니다.', continueExploring:'계속 탐험하기', closeCertificate:'인증서 닫기'
 };
 
 Object.entries(sharedTranslations).forEach(([lang, values]) => {
@@ -1312,7 +1313,8 @@ function renderCurrentLanguageState() {
 }
 
 function hasCompletedCertificateCountries() {
-  return certificateCountries.every(key => completedCountries.has(key));
+  const playableKeys = playableCountryKeys();
+  return playableKeys.length > 0 && playableKeys.every(key => completedCountries.has(key));
 }
 
 function maybeShowCertificate() {
@@ -1320,6 +1322,7 @@ function maybeShowCertificate() {
   if (!certificate || !certificatePending || certificateShown || activeScreen !== 'worldmap') return;
   certificatePending = false;
   certificateShown = true;
+  localStorage.setItem(certificateShownKey, 'true');
   certificate.hidden = false;
   document.body.classList.add('certificate-open');
 }
@@ -1533,9 +1536,14 @@ function runIntroStats() {
 
 function enterFromIntro(mode) {
   if (!savePlayerNameFromIntro()) return;
+  clearJourneyProgress();
+  updateCompletionMarkers();
+  renderCollection();
+  closeCertificate();
+  closeCardUnlock();
   selectedMode = mode;
   const status = q('#atlasStatus');
-  if (status && !completedCountries.size) {
+  if (status) {
     status.textContent = mode === 'duel'
       ? t('duelStatus')
       : t('soloStatus');
@@ -1579,6 +1587,10 @@ q('#mapPreviewBtn').addEventListener('click', () => showScreen('worldmap'));
 
 qa('[data-scroll]').forEach(btn => btn.addEventListener('click', () => {
   showScreen('home', { instant: true });
+  qa('.nav-item').forEach(el => {
+    const key = el.dataset.nav || el.dataset.scroll;
+    el.classList.toggle('active', key === btn.dataset.scroll);
+  });
   requestAnimationFrame(() => {
     const target = document.getElementById(btn.dataset.scroll);
     if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1638,7 +1650,6 @@ const mapLocations = {
   vietnam: [14.0583, 108.2772],
   ghana: [7.9465, -1.0232],
   southKorea: [35.9078, 127.7669],
-  china: [35.8617, 104.1954],
   india: [20.5937, 78.9629],
   thailand: [15.8700, 100.9925],
   philippines: [12.8797, 121.7740],
@@ -1946,8 +1957,6 @@ function launchExternalGame(key, url) {
     window.location.href = `game-view.html?country=${encodeURIComponent(key)}`;
     return;
   }
-  completedCountries.add(key);
-  persistProgress();
   window.location.href = `${url}?from=${encodeURIComponent(key)}`;
 }
 
@@ -2126,6 +2135,7 @@ function restoreProgress() {
       if (Array.isArray(saved)) saved.forEach(key => { if (isKnownCountry(key)) completedCountries.add(key); });
     });
   } catch (err) { /* ignore blocked or malformed storage */ }
+  if (localStorage.getItem(certificateShownKey) === 'true') certificateShown = true;
   if (!certificateShown && hasCompletedCertificateCountries()) certificatePending = true;
 }
 

@@ -761,22 +761,6 @@
           <div class="cam-tag"><span class="dot" id="camDot"></span> Pit-cam 04</div>
         </div>
 
-        <div class="gauge-wrap">
-          <svg viewBox="0 0 108 62" aria-hidden="true">
-            <path class="gauge-track" d="M 10 56 A 44 44 0 0 1 98 56" />
-            <path
-              class="gauge-fill"
-              id="gaugeFill"
-              d="M 10 56 A 44 44 0 0 1 98 56"
-              pathLength="100"
-              stroke-dasharray="100"
-              stroke-dashoffset="100"
-            />
-          </svg>
-          <div class="gauge-pct" id="gaugePct">0%</div>
-          <div class="gauge-label">Wind-up</div>
-        </div>
-
         <div class="status-bar">
           <span class="pulse" id="statusPulse"></span>
           <span id="statusText">Camera not started</span>
@@ -853,9 +837,6 @@
         <!-- 3D camel dice; hidden if the model or WebGL is unavailable -->
         <div class="dice-stage" id="diceStage">
           <canvas id="diceCanvas"></canvas>
-          <div class="dice-stage-msg" id="diceStageMsg">
-            Loading the camel dice…
-          </div>
         </div>
 
         <!-- flat bone dice — the fallback, and fully playable -->
@@ -1181,7 +1162,7 @@
           if (distinct === 4) {
             bonus = true;
             steps += BONUS_STEPS;
-            name = "Дөрвөн бэрх";
+            name = "The Rare Four";
             note =
               "Four bones, four different faces — the lucky cast. Four extra " +
               "steps and the reins stay in your hands for another throw.";
@@ -1246,7 +1227,7 @@
               " · " +
               faces
                 .map(function (f) {
-                  return FACES[f].mn;
+                  return FACES[f].en;
                 })
                 .join(" · ");
 
@@ -1379,6 +1360,7 @@
         var gaugePct = document.getElementById("gaugePct");
 
         function updateGauge(v) {
+          if (!gaugeFill || !gaugePct) return;
           var pct = Math.max(0, Math.min(1, v));
           gaugeFill.setAttribute(
             "stroke-dashoffset",
@@ -1514,12 +1496,17 @@
         }
 
         resetBtn.addEventListener("click", newRace);
-        finishBtn.addEventListener("click", newRace);
+        finishBtn.addEventListener("click", function () {
+          var country =
+            new URLSearchParams(window.location.search).get("from") ||
+            "mongolia";
+          window.location.href =
+            "index.html?complete=" + encodeURIComponent(country);
+        });
 
         buildTracks();
         newRace();
       })();
     </script>
-    <script src="js/complete.js" data-country="mongolia" data-home="index.html"></script>
 </body>
 </html>

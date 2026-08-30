@@ -827,6 +827,7 @@
             </div>
             <div class="btn-row">
               <button class="btn" id="newGameBtn">New game</button>
+              <button class="btn ghost" id="sidebarFinishBtn">Finish Game</button>
             </div>
           </div>
 
@@ -881,7 +882,10 @@
       <div class="banner-inner">
         <h3 id="bannerTitle">White wins</h3>
         <p id="bannerText"></p>
-        <button class="btn" id="bannerBtn">Play again</button>
+        <div class="btn-row">
+          <button class="btn" id="bannerBtn">Play again</button>
+          <button class="btn" id="bannerFinishBtn">Finish Game</button>
+        </div>
       </div>
     </div>
 
@@ -1622,6 +1626,15 @@
           els.banner.hidden = true;
           newGame();
         });
+        function finishGame() {
+          var country =
+            new URLSearchParams(window.location.search).get("from") ||
+            "madagascar";
+          window.location.href =
+            "index.html?complete=" + encodeURIComponent(country);
+        }
+        document.getElementById("bannerFinishBtn").addEventListener("click", finishGame);
+        document.getElementById("sidebarFinishBtn").addEventListener("click", finishGame);
 
         var modeHuman = document.getElementById("modeHuman"),
           modeAi = document.getElementById("modeAi");
@@ -1779,6 +1792,5 @@
       }
     </script>
     <script type="module" src="js/board3d.js"></script>
-    <script src="js/complete.js" data-country="madagascar" data-home="index.html"></script>
 </body>
 </html>

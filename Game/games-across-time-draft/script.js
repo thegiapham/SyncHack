@@ -718,7 +718,7 @@ let discoveryRecords = {};
 let playerName = '';
 let pendingCardCountry = null;
 let unlockTimer = null;
-const certificateCountries = ['vietnam', 'mongolia', 'japan', 'ghana', 'greece'];
+const certificateCountries = ['mongolia', 'unitedKingdom', 'greece', 'japan', 'southKorea', 'madagascar'];
 let certificatePending = false;
 let certificateShown = false;
 const screenNavGroup = {
@@ -830,20 +830,23 @@ function updateCompletionMarkers() {
     const isComplete = completedCountries.has(el.dataset.country);
     el.classList.toggle('completed', isComplete);
     if (el.classList.contains('map-pin')) {
-      const country = countries[el.dataset.country];
+      const country = countryData(el.dataset.country);
       const status = isComplete ? 'completed' : 'not completed';
-      el.setAttribute('aria-label', `${country.country}, ${country.game}, ${status}. Explore`);
+      if (country) el.setAttribute('aria-label', `${country.country}, ${country.game}, ${status}. Explore`);
     }
   });
 
   const status = q('#atlasStatus');
   if (status) {
     status.textContent = completedCountries.size
-      ? t('passportStamped', { countries: [...completedCountries].map(key => countries[key].country).join(', ') })
+      ? t('passportStamped', { countries: [...completedCountries].map(key => (countryData(key) || {}).country).filter(Boolean).join(', ') })
       : t('noStamps');
   }
   updateJourneyCounter();
   refreshLeafletMarkers();
+  // Re-checked here so every completion path (journey, storage restore, or a
+  // separate game page) can arm the certificate, not just restoreProgress().
+  if (!certificateShown && hasCompletedCertificateCountries()) certificatePending = true;
 }
 
 /* =========================================================
@@ -2099,15 +2102,31 @@ const progressKey = 'gat:completed';
 
 function persistProgress() {
   try {
-    sessionStorage.setItem(progressKey, JSON.stringify([...completedCountries]));
+    const payload = JSON.stringify([...completedCountries]);
+    sessionStorage.setItem(progressKey, payload);
+    localStorage.setItem(progressKey, payload);
   } catch (err) { /* storage blocked — progress just won't survive the page change */ }
+}
+
+// Games on their own page have no 'countries' entry — fall back to the atlas.
+function countryData(key) {
+  return countries[key] || atlasEntries[key] || null;
+}
+
+// Countries reachable only through a separate game page have no journey entry,
+// so accept anything the archive knows about rather than journey members alone.
+function isKnownCountry(key) {
+  return Boolean(journey[key] || countries[key] || atlasEntries[key]);
 }
 
 function restoreProgress() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(progressKey) || '[]');
-    if (Array.isArray(saved)) saved.forEach(key => { if (journey[key]) completedCountries.add(key); });
+    [sessionStorage.getItem(progressKey), localStorage.getItem(progressKey)].forEach(raw => {
+      const saved = JSON.parse(raw || '[]');
+      if (Array.isArray(saved)) saved.forEach(key => { if (isKnownCountry(key)) completedCountries.add(key); });
+    });
   } catch (err) { /* ignore blocked or malformed storage */ }
+  if (!certificateShown && hasCompletedCertificateCountries()) certificatePending = true;
 }
 
 function finishJourney() {
